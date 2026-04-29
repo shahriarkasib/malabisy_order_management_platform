@@ -94,7 +94,7 @@ export async function fetchOrders(filter: OrdersFilter = {}): Promise<LineItem[]
       is_exception, needs_confirmation, is_confirmed,
       exception_reason, last_exception_code,
       return_reason
-    FROM \`${PROJECT}.gold.line_item_pipeline\`
+    FROM \`${PROJECT}.gold.line_item_pipeline_live\`
     WHERE 1=1
       ${startDate ? "AND order_date >= @startDate" : ""}
       ${endDate ? "AND order_date <= @endDate" : ""}
@@ -149,8 +149,8 @@ export async function fetchOrders(filter: OrdersFilter = {}): Promise<LineItem[]
  */
 export const fetchTabCounts = unstable_cache(
   async (filter: OrdersFilter = {}): Promise<TabCount[]> => _fetchTabCounts(filter),
-  ["tab-counts-v1"],
-  { revalidate: 60, tags: ["orders"] },
+  ["tab-counts-v2"],
+  { revalidate: 5, tags: ["orders"] },
 );
 
 async function _fetchTabCounts(filter: OrdersFilter = {}): Promise<TabCount[]> {
@@ -159,7 +159,7 @@ async function _fetchTabCounts(filter: OrdersFilter = {}): Promise<TabCount[]> {
 
   const sql = `
     SELECT pipeline_tab, COUNT(*) AS count
-    FROM \`${PROJECT}.gold.line_item_pipeline\`
+    FROM \`${PROJECT}.gold.line_item_pipeline_live\`
     WHERE 1=1
       ${startDate ? "AND order_date >= @startDate" : ""}
       ${endDate ? "AND order_date <= @endDate" : ""}
@@ -224,7 +224,7 @@ export const fetchVendors = unstable_cache(
     const bq = getBigQuery();
     const sql = `
       SELECT DISTINCT vendor
-      FROM \`${PROJECT}.gold.line_item_pipeline\`
+      FROM \`${PROJECT}.gold.line_item_pipeline_live\`
       WHERE vendor IS NOT NULL
       ORDER BY vendor
     `;
