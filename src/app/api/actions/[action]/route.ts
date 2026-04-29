@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { revalidateTag } from "next/cache";
 import { cf } from "@/lib/api/cloud-functions";
 
 export const runtime = "nodejs";
@@ -22,8 +21,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     const body = await req.json();
     // TODO: derive actor_email from auth session instead of trusting client
     const result = await handler(body);
-    // Bust the cached tab counts so the next page load shows fresh numbers
-    revalidateTag("orders");
     return NextResponse.json(result);
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
