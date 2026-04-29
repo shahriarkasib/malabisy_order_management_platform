@@ -56,7 +56,24 @@ export interface OrdersFilter {
   offset?: number;
 }
 
+/**
+ * Cache the rows query for 5s. Multiple polling clients with the same filter
+ * combination will share a single BQ query per 5s window.
+ *
+ * After an action button fires, the route handler calls revalidatePath('/orders')
+ * which busts this — see src/app/api/actions/[action]/route.ts.
+ */
 export async function fetchOrders(filter: OrdersFilter = {}): Promise<LineItem[]> {
+  return _fetchOrdersCached(filter);
+}
+
+const _fetchOrdersCached = unstable_cache(
+  async (filter: OrdersFilter): Promise<LineItem[]> => _fetchOrdersImpl(filter),
+  ["orders-rows-v1"],
+  { revalidate: 5, tags: ["orders"] },
+);
+
+async function _fetchOrdersImpl(filter: OrdersFilter): Promise<LineItem[]> {
   const bq = getBigQuery();
   const {
     pipelineTab = "All Orders",
@@ -157,9 +174,13 @@ async function _fetchTabCounts(filter: OrdersFilter = {}): Promise<TabCount[]> {
   const bq = getBigQuery();
   const { startDate, endDate, vendor, direction = "All" } = filter;
 
+  // Read from the materialized view (auto-refreshing pre-aggregation).
+  // Scan size: ~1 KB regardless of source table size.
+  // Note: MV reads gold.line_item_pipeline only — ops.status_overrides aren't
+  // reflected here. The action buttons update the badge optimistically client-side.
   const sql = `
-    SELECT pipeline_tab, COUNT(*) AS count
-    FROM \`${PROJECT}.gold.line_item_pipeline_live\`
+    SELECT pipeline_tab, SUM(n) AS count
+    FROM \`${PROJECT}.gold.mv_tab_counts\`
     WHERE 1=1
       ${startDate ? "AND order_date >= @startDate" : ""}
       ${endDate ? "AND order_date <= @endDate" : ""}

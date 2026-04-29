@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { cf } from "@/lib/api/cloud-functions";
 
 export const runtime = "nodejs";
@@ -21,6 +22,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ action: st
     const body = await req.json();
     // TODO: derive actor_email from auth session instead of trusting client
     const result = await handler(body);
+    // Bust the orders page cache so the next render shows fresh data.
+    revalidatePath("/orders");
     return NextResponse.json(result);
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
