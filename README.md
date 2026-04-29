@@ -1,36 +1,110 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Malabisy Order Management Platform
 
-## Getting Started
+Production-grade order management for Malabisy. Replaces the Retool dashboard with a custom-branded, owned, scalable platform that serves both the ops team and (eventually) external vendors.
 
-First, run the development server:
+## Stack
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **Next.js 15** (App Router) + **TypeScript (strict)**
+- **Tailwind CSS v4** + **shadcn-style components** (Radix primitives)
+- **TanStack Table** for data grids
+- **TanStack Query** for client-side data fetching
+- **Sonner** for toasts
+- **Lucide** for icons
+- **Zod + React Hook Form** for forms
+- **@google-cloud/bigquery** server-side reads
+- **Clerk** (planned) for auth + roles
+
+## Architecture
+
+```
+Browser
+  │
+  ▼
+Next.js (Vercel)
+  ├── Server Components → BigQuery (read)
+  ├── API Routes        → Cloud Functions (write)
+  └── Client Components → action UI
+       │
+       ▼
+GCP Cloud Functions (existing, unchanged)
+       │
+       ▼
+BigQuery: gold.line_item_pipeline, ops.button_audit, ops.status_overrides …
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The Cloud Functions in `cloud_functions/ops_actions/` handle every write operation (cancel, refund, AWB create, etc.). This app is the **frontend layer** on top — it does direct BigQuery reads for the dashboard and proxies writes through the existing Cloud Functions.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Getting started
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+cp .env.example .env.local
+# Fill in:
+#   GCP_PROJECT_ID=malabisy-data
+#   GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/sa-key.json   (local dev)
+#   OPS_ACTIONS_TOKEN=<value of secret ops-actions-shared-token>
 
-## Learn More
+npm install
+npm run dev
+# open http://localhost:3000
+```
 
-To learn more about Next.js, take a look at the following resources:
+For BigQuery reads locally, either:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. Run `gcloud auth application-default login` (uses your gcloud creds), or
+2. Download a service account key JSON and set `GOOGLE_APPLICATION_CREDENTIALS`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+The service account needs `roles/bigquery.dataViewer` and `roles/bigquery.jobUser` on `malabisy-data`.
 
-## Deploy on Vercel
+## Project structure
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```
+src/
+├── app/
+│   ├── layout.tsx           # root layout: sidebar + header + content
+│   ├── page.tsx             # dashboard home
+│   ├── orders/page.tsx      # orders pipeline (server component)
+│   ├── audit/page.tsx       # audit log
+│   ├── vendors/page.tsx     # placeholder
+│   ├── analytics/page.tsx   # placeholder
+│   ├── settings/page.tsx    # placeholder
+│   └── api/
+│       └── actions/[action]/route.ts  # proxy to Cloud Functions
+├── components/
+│   ├── ui/                  # buttons, badges, inputs (shadcn-style)
+│   ├── layout/              # sidebar, header
+│   └── orders/              # table, action bar, pipeline tabs
+├── lib/
+│   ├── bigquery/            # BQ client + queries
+│   ├── api/                 # Cloud Function client
+│   ├── constants.ts
+│   └── utils.ts
+└── types/                   # shared TypeScript types
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Deploy to Vercel
+
+```bash
+vercel link
+vercel env add GCP_PROJECT_ID            # malabisy-data
+vercel env add GCP_SERVICE_ACCOUNT_JSON  # full JSON of an SA key (BigQuery viewer + jobUser)
+vercel env add OPS_ACTIONS_TOKEN         # value from `gcloud secrets versions access latest --secret=ops-actions-shared-token`
+vercel env add NEXT_PUBLIC_CF_BASE       # https://us-central1-malabisy-data.cloudfunctions.net
+
+# subsequent deploys happen automatically on git push to main
+```
+
+## Auth (planned, last phase)
+
+Clerk will be added at the end. When integrated:
+
+- Ops users get full access to `/orders`, `/audit`, `/vendors`, `/settings`.
+- Vendor users get a scoped `/vendor` view with only their own vendor's data.
+- Action buttons gate by role — vendors can mark items shipped on their own orders, but can't cancel or refund.
+- All actions log `actor_email` from Clerk's session, not the client.
+
+## Roadmap
+
+- [ ] Vendor portal (scoped reads + scoped writes)
+- [ ] Real-time order ingestion via Pub/Sub (replaces hourly Airbyte sync)
+- [ ] Dashboard charts (sales, courier performance, vendor leaderboard)
+- [ ] Mobile-responsive table view
