@@ -20,8 +20,10 @@ import {
 import { fetchVendors } from "@/lib/bigquery/queries";
 import { resolvePeriod } from "@/lib/period";
 import { FinanceFilterBar } from "@/components/admin/finance-filter-bar";
+import { DailyNetChart, MonthlyChart } from "@/components/admin/finance-charts";
+import { CsvDownload } from "@/components/admin/csv-download";
 import { Badge } from "@/components/ui/badge";
-import { TrendingUp, Clock, Banknote, Wallet, AlertCircle } from "lucide-react";
+import { Clock, Banknote, Wallet, AlertCircle } from "lucide-react";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Finance" };
@@ -167,11 +169,11 @@ async function OverviewTab({ filter }: { filter: FinanceFilter }) {
         })}
       </div>
 
-      <DailyChart points={daily} />
+      <DailyNetChart points={daily} />
 
       <FeeBreakdown summary={summary} />
 
-      <MonthlyTable rows={monthly} />
+      <MonthlyChart rows={monthly} />
 
       <UpcomingCashoutsTable rows={upcoming} />
     </div>
@@ -197,10 +199,29 @@ async function OrdersTab({ filter }: { filter: FinanceFilter }) {
     <div className="space-y-4">
       {errors.length > 0 && <ErrorBox errors={errors} />}
 
-      <div className="grid grid-cols-3 gap-4">
-        <SmallStat label="Gross COD"      value={formatCurrency(totals.cod, "EGP")}  hint={`${rows.length} deliveries`} />
-        <SmallStat label="Courier fees"   value={formatCurrency(totals.fees, "EGP")} hint={totals.cod > 0 ? `${((totals.fees/totals.cod)*100).toFixed(1)}% of gross` : ""} />
-        <SmallStat label="Net to Malabisy" value={formatCurrency(totals.net, "EGP")} hint={totals.cod > 0 ? `${((totals.net/totals.cod)*100).toFixed(1)}% kept` : ""} />
+      <div className="flex items-center justify-between gap-4">
+        <div className="grid flex-1 grid-cols-3 gap-4">
+          <SmallStat label="Gross COD"      value={formatCurrency(totals.cod, "EGP")}  hint={`${rows.length} deliveries`} />
+          <SmallStat label="Courier fees"   value={formatCurrency(totals.fees, "EGP")} hint={totals.cod > 0 ? `${((totals.fees/totals.cod)*100).toFixed(1)}% of gross` : ""} />
+          <SmallStat label="Net to Malabisy" value={formatCurrency(totals.net, "EGP")} hint={totals.cod > 0 ? `${((totals.net/totals.cod)*100).toFixed(1)}% kept` : ""} />
+        </div>
+        <CsvDownload
+          rows={rows as unknown as Array<Record<string, unknown>>}
+          filename={`finance-orders-${new Date().toISOString().slice(0, 10)}.csv`}
+          columns={[
+            { key: "delivered_at",      header: "Delivered" },
+            { key: "order_name",        header: "Order" },
+            { key: "tracking_number",   header: "Tracking" },
+            { key: "courier",           header: "Courier" },
+            { key: "vendors",           header: "Vendors" },
+            { key: "customer_name",     header: "Customer" },
+            { key: "state_value",       header: "Status" },
+            { key: "cod",               header: "COD (EGP)" },
+            { key: "fees",              header: "Fees (EGP)" },
+            { key: "net",               header: "Net (EGP)" },
+            { key: "next_cashout_date", header: "Cashout" },
+          ]}
+        />
       </div>
 
       <div className="overflow-x-auto rounded-lg border border-border bg-card">
@@ -264,10 +285,25 @@ async function VendorsTab({ filter }: { filter: FinanceFilter }) {
     <div className="space-y-4">
       {errors.length > 0 && <ErrorBox errors={errors} />}
 
-      <div className="grid grid-cols-3 gap-4">
-        <SmallStat label="Vendors"      value={String(rows.length)}                          hint="with deliveries in window" />
-        <SmallStat label="Total net"    value={formatCurrency(totals.net, "EGP")}            hint={`${formatCurrency(totals.cod, "EGP")} gross`} />
-        <SmallStat label="Total fees"   value={formatCurrency(totals.fees, "EGP")}           hint={totals.cod > 0 ? `${((totals.fees/totals.cod)*100).toFixed(1)}% of gross` : ""} />
+      <div className="flex items-center justify-between gap-4">
+        <div className="grid flex-1 grid-cols-3 gap-4">
+          <SmallStat label="Vendors"      value={String(rows.length)}                          hint="with deliveries in window" />
+          <SmallStat label="Total net"    value={formatCurrency(totals.net, "EGP")}            hint={`${formatCurrency(totals.cod, "EGP")} gross`} />
+          <SmallStat label="Total fees"   value={formatCurrency(totals.fees, "EGP")}           hint={totals.cod > 0 ? `${((totals.fees/totals.cod)*100).toFixed(1)}% of gross` : ""} />
+        </div>
+        <CsvDownload
+          rows={rows as unknown as Array<Record<string, unknown>>}
+          filename={`finance-vendors-${new Date().toISOString().slice(0, 10)}.csv`}
+          columns={[
+            { key: "vendor",           header: "Vendor" },
+            { key: "orders",           header: "Orders" },
+            { key: "cod_share",        header: "Gross (EGP)" },
+            { key: "fees_share",       header: "Fees (EGP)" },
+            { key: "net_share",        header: "Net (EGP)" },
+            { key: "bosta_share",      header: "Bosta (EGP)" },
+            { key: "logestechs_share", header: "Logestechs (EGP)" },
+          ]}
+        />
       </div>
 
       <p className="text-xs text-muted-foreground">
@@ -294,10 +330,19 @@ async function VendorsTab({ filter }: { filter: FinanceFilter }) {
               <tr><td colSpan={8} className="px-3 py-12 text-center text-muted-foreground">No vendor activity in this window.</td></tr>
             ) : rows.map((r) => {
               const widthPct = (r.net_share / maxNet) * 100;
+              const drillUrl = `/finance?tab=orders&vendor=${encodeURIComponent(r.vendor)}`;
               return (
-                <tr key={r.vendor} className="border-t border-border hover:bg-accent/30">
-                  <td className="px-3 py-2 font-medium">{r.vendor}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{r.orders.toLocaleString()}</td>
+                <tr
+                  key={r.vendor}
+                  className="border-t border-border transition-colors hover:bg-accent/40"
+                  title={`Click any cell to see ${r.orders} orders for ${r.vendor}`}
+                >
+                  <td className="px-3 py-2 font-medium">
+                    <Link href={drillUrl} className="text-primary hover:underline">{r.vendor}</Link>
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    <Link href={drillUrl} className="hover:underline">{r.orders.toLocaleString()}</Link>
+                  </td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(r.cod_share, "EGP")}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-amber-600">{formatCurrency(r.fees_share, "EGP")}</td>
                   <td className="px-3 py-2 text-right font-semibold tabular-nums text-emerald-600">{formatCurrency(r.net_share, "EGP")}</td>
@@ -391,44 +436,6 @@ function FeeBar({ label, gross, fees }: { label: string; gross: number; fees: nu
   );
 }
 
-function MonthlyTable({ rows }: { rows: MonthlyCashflowRow[] }) {
-  return (
-    <section className="rounded-xl border border-border bg-card p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-semibold">Monthly net received</h2>
-          <p className="text-xs text-muted-foreground">Last 12 months · what landed in Malabisy's bank.</p>
-        </div>
-        <TrendingUp className="size-4 text-muted-foreground" />
-      </div>
-      <div className="mt-4 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="border-b border-border bg-muted/40 text-left">
-            <tr>
-              <th className="px-3 py-2 font-medium">Month</th>
-              <th className="px-3 py-2 text-right font-medium">Bosta</th>
-              <th className="px-3 py-2 text-right font-medium">Logestechs</th>
-              <th className="px-3 py-2 text-right font-medium">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr><td colSpan={4} className="px-3 py-12 text-center text-muted-foreground">No data yet.</td></tr>
-            ) : rows.map((m) => (
-              <tr key={m.month} className="border-t border-border">
-                <td className="px-3 py-2 font-medium">{m.month}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(m.bosta_net, "EGP")}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(m.logestechs_net, "EGP")}</td>
-                <td className="px-3 py-2 text-right font-semibold tabular-nums">{formatCurrency(m.total_net_egp, "EGP")}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
 function UpcomingCashoutsTable({ rows }: { rows: UpcomingCashout[] }) {
   return (
     <section className="rounded-xl border border-border bg-card p-6">
@@ -467,31 +474,3 @@ function UpcomingCashoutsTable({ rows }: { rows: UpcomingCashout[] }) {
   );
 }
 
-function DailyChart({ points }: { points: DailyPoint[] }) {
-  if (points.length === 0) return null;
-  const max = Math.max(...points.map((p) => p.total), 1);
-  return (
-    <section className="rounded-xl border border-border bg-card p-6">
-      <h2 className="text-base font-semibold">Daily net received</h2>
-      <p className="text-xs text-muted-foreground">Stacked: green = Bosta, amber = Logestechs.</p>
-      <div className="mt-4 grid items-end" style={{ gridTemplateColumns: `repeat(${points.length}, minmax(0, 1fr))`, gap: 2, height: 160 }}>
-        {points.map((p) => {
-          const totalH = (p.total / max) * 100;
-          const bostaH = p.total > 0 ? (p.bosta / p.total) * totalH : 0;
-          const logH   = totalH - bostaH;
-          return (
-            <div key={p.date} className="group relative flex h-full flex-col-reverse" title={`${p.date}  Bosta: ${p.bosta.toLocaleString()}  Logestechs: ${p.logestechs.toLocaleString()}`}>
-              <div className="bg-emerald-500" style={{ height: `${bostaH}%` }} />
-              <div className="bg-amber-500"   style={{ height: `${logH}%` }} />
-            </div>
-          );
-        })}
-      </div>
-      <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
-        <span>{points[0]?.date}</span>
-        <span>peak day: {formatCurrency(max, "EGP")}</span>
-        <span>{points[points.length - 1]?.date}</span>
-      </div>
-    </section>
-  );
-}
