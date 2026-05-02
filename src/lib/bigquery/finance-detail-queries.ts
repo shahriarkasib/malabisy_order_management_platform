@@ -69,11 +69,12 @@ function buildBaseUnion(filter: FinanceFilter): string {
   const wantBosta = courier === "All" || courier === "Bosta";
   const wantLogestechs = courier === "All" || courier === "Logestechs";
 
-  // Date filter applied to delivery completion timestamp.
+  // Date filter applied to actual delivery completion timestamp (delivery_time)
+  // — not updated_at, which moves whenever Bosta touches the row.
   const bostaDateClause = filter.startDate
-    ? `AND DATE(updated_at) >= '${filter.startDate}'` : "";
+    ? `AND DATE(delivery_time) >= '${filter.startDate}'` : "";
   const bostaEndClause = filter.endDate
-    ? `AND DATE(updated_at) <= '${filter.endDate}'` : "";
+    ? `AND DATE(delivery_time) <= '${filter.endDate}'` : "";
   const logDateClause = filter.startDate
     ? `AND DATE(COALESCE(delivery_date, _synced_at)) >= '${filter.startDate}'` : "";
   const logEndClause = filter.endDate
@@ -103,9 +104,10 @@ function buildBaseUnion(filter: FinanceFilter): string {
           - IFNULL(cash_cycle_vat,0) - IFNULL(cash_cycle_opening_package_fees,0)
           - IFNULL(cash_cycle_flex_ship_fees,0) - IFNULL(cash_cycle_fulfillment_fees,0)  AS net,
         CAST(next_cashout_date AS STRING)                 AS next_cashout_date,
-        CAST(updated_at AS STRING)                        AS delivered_at
+        CAST(delivery_time AS STRING)                     AS delivered_at
       FROM \`${PROJECT}.bosta.deliveries_detail\`
       WHERE state_code = 45
+        AND delivery_time IS NOT NULL
         ${bostaDateClause}
         ${bostaEndClause}
     `);

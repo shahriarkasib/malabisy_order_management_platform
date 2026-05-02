@@ -168,10 +168,16 @@ async function SummaryAndFeeSection({ filter }: { filter: FinanceFilter }) {
       ? `since ${filter.startDate}`
       : "last 30 days";
   const cards = [
-    { label: `Already received (${windowLabel})`, icon: Banknote, color: "emerald" as const,
-      total: summary.total_received_egp, bosta: summary.bosta_received_egp, log: summary.logestechs_received_egp },
-    { label: `Pending — delivered, awaiting cashout (${windowLabel})`, icon: Clock, color: "amber" as const,
-      total: summary.total_pending_egp, bosta: summary.bosta_pending_egp, log: summary.logestechs_pending_egp },
+    {
+      label: `Already received`, sub: `Money in Malabisy's bank · delivered ${windowLabel}`,
+      icon: Banknote, color: "emerald" as const,
+      total: summary.total_received_egp, bosta: summary.bosta_received_egp, log: summary.logestechs_received_egp,
+    },
+    {
+      label: `Pending`, sub: `Delivered ${windowLabel}, courier hasn't paid out yet`,
+      icon: Clock, color: "amber" as const,
+      total: summary.total_pending_egp, bosta: summary.bosta_pending_egp, log: summary.logestechs_pending_egp,
+    },
   ];
 
   return (
@@ -182,9 +188,12 @@ async function SummaryAndFeeSection({ filter }: { filter: FinanceFilter }) {
           const Icon = c.icon;
           return (
             <div key={c.label} className="rounded-xl border border-border bg-card p-6">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-medium text-muted-foreground">{c.label}</p>
-                <Icon className={c.color === "emerald" ? "size-4 text-emerald-500" : "size-4 text-amber-500"} />
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">{c.label}</p>
+                  <p className="text-xs text-muted-foreground">{c.sub}</p>
+                </div>
+                <Icon className={c.color === "emerald" ? "size-4 shrink-0 text-emerald-500" : "size-4 shrink-0 text-amber-500"} />
               </div>
               <p className="mt-3 text-3xl font-bold tabular-nums">{formatCurrency(c.total, "EGP")}</p>
               <div className="mt-4 grid grid-cols-2 gap-4 border-t border-border pt-3 text-sm">

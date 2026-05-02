@@ -29,9 +29,12 @@ function clauses(filter: FinanceFilter | undefined) {
   const courier = filter?.courier ?? "All";
   const vendor = filter?.vendor;
 
+  // Bosta filter uses delivery_time (when the parcel was actually delivered) —
+  // not updated_at, which jumps around as Bosta touches rows. delivery_time
+  // gives a stable, intuitive "delivered in this window" filter.
   const bostaDate = [
-    start ? `AND DATE(updated_at) >= '${start}'` : `AND DATE(updated_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)`,
-    end   ? `AND DATE(updated_at) <= '${end}'`   : "",
+    start ? `AND DATE(delivery_time) >= '${start}'` : `AND DATE(delivery_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)`,
+    end   ? `AND DATE(delivery_time) <= '${end}'`   : "",
   ].join("\n        ");
   const logDate = [
     start ? `AND DATE(COALESCE(delivery_date, _synced_at)) >= '${start}'` : `AND DATE(COALESCE(delivery_date, _synced_at)) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)`,
@@ -84,24 +87,40 @@ export async function fetchCashflowSummary(filter?: FinanceFilter): Promise<Cash
   // Each branch returns a single row of (received, pending, gross, fees).
   // When a courier is filtered out we substitute a constant-zero stub so the
   // CROSS JOIN below still yields one combined row.
+  // Received vs pending is decided by cash_cycle_deposited_at — Bosta sets this
+  // timestamp the moment money lands in our bank. (Earlier code used
+  // next_cashout_date < NOW, but Bosta CLEARS that field after deposit so 99%
+  // of received parcels were being mis-bucketed as pending.)
+  //   received = delivered AND cash_cycle_deposited_at IS NOT NULL
+  //   pending  = delivered AND cash_cycle_cod IS NOT NULL AND cash_cycle_deposited_at IS NULL
+  //              (delivered but Bosta hasn't deposited yet)
+  //   plus     = delivered very recently AND cash_cycle_cod IS NULL — Bosta hasn't
+  //              even computed fees yet. We approximate net at goods_value * 0.85
+  //              (typical net % after fees) so it doesn't disappear from the card.
   const bostaCte = c.wantBosta ? `
     SELECT
-      SUM(IF(next_cashout_date < CURRENT_TIMESTAMP(),
-             cash_cycle_cod
+      SUM(IF(cash_cycle_deposited_at IS NOT NULL,
+             IFNULL(cash_cycle_cod,0)
              - IFNULL(cash_cycle_bosta_fees,0) - IFNULL(cash_cycle_shipping_fees,0)
              - IFNULL(cash_cycle_collection_fees,0) - IFNULL(cash_cycle_cod_fees,0)
              - IFNULL(cash_cycle_insurance_fees,0) - IFNULL(cash_cycle_expedite_fees,0)
              - IFNULL(cash_cycle_vat,0) - IFNULL(cash_cycle_opening_package_fees,0)
              - IFNULL(cash_cycle_flex_ship_fees,0) - IFNULL(cash_cycle_fulfillment_fees,0),
              0)) AS received,
-      SUM(IF(next_cashout_date >= CURRENT_TIMESTAMP() OR next_cashout_date IS NULL,
-             IFNULL(cash_cycle_cod,0) - IFNULL(cash_cycle_bosta_fees,0)
-             - IFNULL(cash_cycle_shipping_fees,0) - IFNULL(cash_cycle_collection_fees,0)
-             - IFNULL(cash_cycle_cod_fees,0) - IFNULL(cash_cycle_insurance_fees,0)
-             - IFNULL(cash_cycle_expedite_fees,0) - IFNULL(cash_cycle_vat,0)
-             - IFNULL(cash_cycle_opening_package_fees,0) - IFNULL(cash_cycle_flex_ship_fees,0)
-             - IFNULL(cash_cycle_fulfillment_fees,0),
-             0)) AS pending,
+      SUM(
+        CASE
+          WHEN cash_cycle_deposited_at IS NULL AND cash_cycle_cod IS NOT NULL THEN
+            cash_cycle_cod
+            - IFNULL(cash_cycle_bosta_fees,0) - IFNULL(cash_cycle_shipping_fees,0)
+            - IFNULL(cash_cycle_collection_fees,0) - IFNULL(cash_cycle_cod_fees,0)
+            - IFNULL(cash_cycle_insurance_fees,0) - IFNULL(cash_cycle_expedite_fees,0)
+            - IFNULL(cash_cycle_vat,0) - IFNULL(cash_cycle_opening_package_fees,0)
+            - IFNULL(cash_cycle_flex_ship_fees,0) - IFNULL(cash_cycle_fulfillment_fees,0)
+          WHEN cash_cycle_cod IS NULL THEN
+            IFNULL(goods_value, 0) * 0.85
+          ELSE 0
+        END
+      ) AS pending,
       SUM(IFNULL(cash_cycle_cod,0)) AS gross,
       SUM(IFNULL(cash_cycle_bosta_fees,0) + IFNULL(cash_cycle_shipping_fees,0)
         + IFNULL(cash_cycle_collection_fees,0) + IFNULL(cash_cycle_cod_fees,0)
@@ -172,19 +191,21 @@ export async function fetchMonthlyCashflow(months = 12, filter?: FinanceFilter):
   const bq = getBigQuery();
   const c = clauses(filter);
 
-  // When the filter narrows below 12 months we still want to show whatever's in
-  // the active window. But when no date filter is set, force at least N months
-  // so the chart isn't empty on first paint.
+  // The chart respects the user's filter exactly — no implicit 12-month window.
+  // If the filter is "last 7 days" it'll show 1 bar; if it's a custom 6-month
+  // range it'll show 6. This way the monthly chart sums to the cards.
+  // When NO date filter is set we extend to N months back via the override so
+  // the chart isn't sparse on first paint.
   const monthsClauseBosta = filter?.startDate
-    ? "" // filter date already enforced by clauses()
-    : `AND DATE(updated_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL ${months} MONTH)`;
+    ? "" // filter window already applied via c.bostaDate
+    : `AND DATE(delivery_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL ${months} MONTH)`;
   const monthsClauseLog = filter?.startDate
     ? ""
     : `AND DATE(COALESCE(delivery_date, _synced_at)) >= DATE_SUB(CURRENT_DATE(), INTERVAL ${months} MONTH)`;
 
   const bostaCte = c.wantBosta ? `
     SELECT
-      FORMAT_DATE('%Y-%m', DATE(updated_at)) AS month,
+      FORMAT_DATE('%Y-%m', DATE(delivery_time)) AS month,
       SUM(IFNULL(cash_cycle_cod, 0)
         - IFNULL(cash_cycle_bosta_fees,0) - IFNULL(cash_cycle_shipping_fees,0)
         - IFNULL(cash_cycle_collection_fees,0) - IFNULL(cash_cycle_cod_fees,0)
@@ -193,6 +214,7 @@ export async function fetchMonthlyCashflow(months = 12, filter?: FinanceFilter):
         - IFNULL(cash_cycle_flex_ship_fees,0) - IFNULL(cash_cycle_fulfillment_fees,0)) AS bosta_net
     FROM \`${PROJECT}.bosta.deliveries_detail\` bd
     WHERE state_code = 45
+      AND delivery_time IS NOT NULL
       ${c.bostaDate}
       ${monthsClauseBosta}
       ${c.vendorClauseBosta}
