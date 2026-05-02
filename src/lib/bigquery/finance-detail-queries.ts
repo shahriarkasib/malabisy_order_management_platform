@@ -112,19 +112,23 @@ function buildBaseUnion(filter: FinanceFilter): string {
   }
 
   if (wantLogestechs) {
+    // Logestechs schema differs: shopify_order_number (INT) instead of
+    // business_reference (STRING). Cast + format as "#NNNNN" so the Orders
+    // tab cell looks consistent across both couriers.
     parts.push(`
       SELECT
-        CAST(package_id AS STRING)                        AS delivery_id,
-        'Logestechs'                                      AS courier,
-        barcode                                           AS tracking_number,
-        business_reference                                AS order_name,
-        CAST(NULL AS STRING)                              AS customer_name,
-        en_status                                         AS state_value,
-        IFNULL(cod, 0)                                    AS cod,
-        IFNULL(cod, 0) - IFNULL(net_cod, 0)               AS fees,
-        IFNULL(net_cod, 0)                                AS net,
-        CAST(NULL AS STRING)                              AS next_cashout_date,
-        CAST(COALESCE(delivery_date, _synced_at) AS STRING) AS delivered_at
+        CAST(package_id AS STRING)                                                  AS delivery_id,
+        'Logestechs'                                                                AS courier,
+        barcode                                                                     AS tracking_number,
+        IF(shopify_order_number IS NOT NULL,
+           CONCAT('#', CAST(shopify_order_number AS STRING)), NULL)                AS order_name,
+        NULLIF(TRIM(CONCAT(IFNULL(receiver_first_name,''), ' ', IFNULL(receiver_last_name,''))), '') AS customer_name,
+        en_status                                                                   AS state_value,
+        IFNULL(cod, 0)                                                              AS cod,
+        IFNULL(cod, 0) - IFNULL(net_cod, 0)                                         AS fees,
+        IFNULL(net_cod, 0)                                                          AS net,
+        CAST(NULL AS STRING)                                                        AS next_cashout_date,
+        CAST(COALESCE(delivery_date, _synced_at) AS STRING)                         AS delivered_at
       FROM \`${PROJECT}.bronze.logestechs_deliveries\`
       WHERE status = 'DELIVERED_TO_RECIPIENT'
         ${logDateClause}

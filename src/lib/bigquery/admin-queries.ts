@@ -13,6 +13,11 @@ export interface VendorWithUsers {
   active_product_count: number;
   user_count: number;
   users: Array<{ email: string; display_name: string | null; granted_at: string | null }>;
+  edits_total: number;
+  edits_synced: number;     // ones whose superseded_at is set — Shopify caught up
+  edits_pending: number;    // success but Shopify-side hasn't reflected yet
+  edits_failed: number;
+  last_edit_at: string | null;
 }
 
 /**
@@ -41,15 +46,32 @@ export async function fetchVendorsWithUsers(): Promise<VendorWithUsers[]> {
       FROM \`${PROJECT}.ops.vendor_user_access\` va
       JOIN \`${PROJECT}.ops.vendor_accounts\` a ON LOWER(a.email) = LOWER(va.email) AND a.active = TRUE
       GROUP BY va.vendor
+    ),
+    vendor_edit_stats AS (
+      SELECT
+        vendor,
+        COUNT(*) AS edits_total,
+        COUNTIF(superseded_at IS NOT NULL) AS edits_synced,
+        COUNTIF(superseded_at IS NULL AND final_status = 'success') AS edits_pending,
+        COUNTIF(final_status != 'success') AS edits_failed,
+        CAST(MAX(edited_at) AS STRING) AS last_edit_at
+      FROM \`${PROJECT}.ops.vendor_edits\`
+      GROUP BY vendor
     )
     SELECT
       vs.vendor,
       vs.product_count,
       vs.active_product_count,
       IFNULL(vu.user_count, 0) AS user_count,
-      IFNULL(vu.users, []) AS users
+      IFNULL(vu.users, []) AS users,
+      IFNULL(ve.edits_total, 0)   AS edits_total,
+      IFNULL(ve.edits_synced, 0)  AS edits_synced,
+      IFNULL(ve.edits_pending, 0) AS edits_pending,
+      IFNULL(ve.edits_failed, 0)  AS edits_failed,
+      ve.last_edit_at
     FROM vendor_stats vs
     LEFT JOIN vendor_users vu USING (vendor)
+    LEFT JOIN vendor_edit_stats ve USING (vendor)
     ORDER BY vs.product_count DESC
   `;
   const [rows] = await bq.query({ query: sql });
