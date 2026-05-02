@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import {
@@ -84,11 +85,27 @@ export default async function FinancePage({ searchParams }: Props) {
         <TabLink href={withParams(sp, "tab", "vendors")} active={tab === "vendors"} label="Vendors" />
       </div>
 
-      {tab === "overview"  && <OverviewTab filter={filter} />}
-      {tab === "orders"    && <OrdersTab   filter={filter} />}
-      {tab === "vendors"   && <VendorsTab  filter={filter} />}
+      {tab === "overview" && (
+        <Suspense key={`ov-${suspenseKey(filter)}`} fallback={<OverviewSkeleton />}>
+          <OverviewTab filter={filter} />
+        </Suspense>
+      )}
+      {tab === "orders" && (
+        <Suspense key={`or-${suspenseKey(filter)}`} fallback={<TableSkeleton rows={10} cols={9} />}>
+          <OrdersTab filter={filter} />
+        </Suspense>
+      )}
+      {tab === "vendors" && (
+        <Suspense key={`ve-${suspenseKey(filter)}`} fallback={<TableSkeleton rows={8} cols={8} />}>
+          <VendorsTab filter={filter} />
+        </Suspense>
+      )}
     </div>
   );
+}
+
+function suspenseKey(f: FinanceFilter): string {
+  return `${f.startDate ?? ""}|${f.endDate ?? ""}|${f.courier}|${f.vendor ?? ""}`;
 }
 
 function TabLink({ href, active, label }: { href: string; active: boolean; label: string }) {
@@ -120,18 +137,30 @@ function withParams(current: Record<string, string | undefined>, key: string, va
 // Overview tab
 // ============================================================================
 
-async function OverviewTab({ filter }: { filter: FinanceFilter }) {
-  const [summaryR, monthlyR, upcomingR, dailyR] = await Promise.all([
-    safe("summary",  () => fetchCashflowSummary(filter),     EMPTY_SUMMARY),
-    safe("monthly",  () => fetchMonthlyCashflow(12, filter), [] as MonthlyCashflowRow[]),
-    safe("upcoming", () => fetchUpcomingCashouts(21, filter), [] as UpcomingCashout[]),
-    safe("daily",    () => fetchDailyNet(filter),            [] as DailyPoint[]),
-  ]);
+function OverviewTab({ filter }: { filter: FinanceFilter }) {
+  // Each section streams independently — slow query in one shouldn't block others.
+  return (
+    <div className="space-y-6">
+      <Suspense fallback={<SummaryCardsSkeleton />}>
+        <SummaryAndFeeSection filter={filter} />
+      </Suspense>
+      <Suspense fallback={<ChartSkeleton title="Daily net received" />}>
+        <DailyChartSection filter={filter} />
+      </Suspense>
+      <Suspense fallback={<ChartSkeleton title="Monthly cashflow" />}>
+        <MonthlyChartSection filter={filter} />
+      </Suspense>
+      <Suspense fallback={<TableSkeleton rows={5} cols={3} title="Upcoming Bosta cashouts" />}>
+        <UpcomingCashoutsSection filter={filter} />
+      </Suspense>
+    </div>
+  );
+}
+
+async function SummaryAndFeeSection({ filter }: { filter: FinanceFilter }) {
+  const summaryR = await safe("summary", () => fetchCashflowSummary(filter), EMPTY_SUMMARY);
   const summary = summaryR.value;
-  const monthly = monthlyR.value;
-  const upcoming = upcomingR.value;
-  const daily = dailyR.value;
-  const errors = [summaryR.error, monthlyR.error, upcomingR.error, dailyR.error].filter(Boolean) as string[];
+  const errors = summaryR.error ? [summaryR.error] : [];
 
   const windowLabel = filter.startDate && filter.endDate
     ? `${filter.startDate} → ${filter.endDate}`
@@ -148,7 +177,6 @@ async function OverviewTab({ filter }: { filter: FinanceFilter }) {
   return (
     <div className="space-y-6">
       {errors.length > 0 && <ErrorBox errors={errors} />}
-
       <div className="grid gap-4 md:grid-cols-2">
         {cards.map((c) => {
           const Icon = c.icon;
@@ -173,15 +201,38 @@ async function OverviewTab({ filter }: { filter: FinanceFilter }) {
           );
         })}
       </div>
-
-      <DailyNetChart points={daily} />
-
       <FeeBreakdown summary={summary} />
-
-      <MonthlyChart rows={monthly} />
-
-      <UpcomingCashoutsTable rows={upcoming} />
     </div>
+  );
+}
+
+async function DailyChartSection({ filter }: { filter: FinanceFilter }) {
+  const r = await safe("daily", () => fetchDailyNet(filter), [] as DailyPoint[]);
+  return (
+    <>
+      {r.error && <ErrorBox errors={[r.error]} />}
+      <DailyNetChart points={r.value} />
+    </>
+  );
+}
+
+async function MonthlyChartSection({ filter }: { filter: FinanceFilter }) {
+  const r = await safe("monthly", () => fetchMonthlyCashflow(12, filter), [] as MonthlyCashflowRow[]);
+  return (
+    <>
+      {r.error && <ErrorBox errors={[r.error]} />}
+      <MonthlyChart rows={r.value} />
+    </>
+  );
+}
+
+async function UpcomingCashoutsSection({ filter }: { filter: FinanceFilter }) {
+  const r = await safe("upcoming", () => fetchUpcomingCashouts(21, filter), [] as UpcomingCashout[]);
+  return (
+    <>
+      {r.error && <ErrorBox errors={[r.error]} />}
+      <UpcomingCashoutsTable rows={r.value} />
+    </>
   );
 }
 
@@ -372,6 +423,89 @@ async function VendorsTab({ filter }: { filter: FinanceFilter }) {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+// ============================================================================
+// Skeletons (shown while server queries run)
+// ============================================================================
+
+function Shimmer({ className }: { className?: string }) {
+  return <div className={cn("animate-pulse rounded bg-muted/60", className)} />;
+}
+
+function SummaryCardsSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-4 md:grid-cols-2">
+        {[0, 1].map((i) => (
+          <div key={i} className="rounded-xl border border-border bg-card p-6 space-y-3">
+            <Shimmer className="h-3 w-48" />
+            <Shimmer className="h-8 w-32" />
+            <div className="grid grid-cols-2 gap-4 border-t border-border pt-3">
+              <div className="space-y-1.5"><Shimmer className="h-3 w-12" /><Shimmer className="h-4 w-20" /></div>
+              <div className="space-y-1.5"><Shimmer className="h-3 w-16" /><Shimmer className="h-4 w-20" /></div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="rounded-xl border border-border bg-card p-6 space-y-3">
+        <Shimmer className="h-4 w-56" />
+        <Shimmer className="h-3 w-72" />
+        <Shimmer className="h-3 w-full" />
+        <Shimmer className="h-3 w-full" />
+      </div>
+    </div>
+  );
+}
+
+function ChartSkeleton({ title }: { title: string }) {
+  return (
+    <section className="rounded-xl border border-border bg-card p-6">
+      <div className="space-y-1">
+        <h2 className="text-base font-semibold">{title}</h2>
+        <Shimmer className="h-3 w-48" />
+      </div>
+      <Shimmer className="mt-6 h-56 w-full" />
+    </section>
+  );
+}
+
+function TableSkeleton({ rows, cols, title }: { rows: number; cols: number; title?: string }) {
+  return (
+    <section className={cn(title ? "rounded-xl border border-border bg-card p-6" : "")}>
+      {title && (
+        <div className="space-y-1">
+          <h2 className="text-base font-semibold">{title}</h2>
+          <Shimmer className="h-3 w-72" />
+        </div>
+      )}
+      <div className={cn(title ? "mt-4" : "", "overflow-hidden rounded-lg border border-border bg-card")}>
+        <div className="border-b border-border bg-muted/40 p-3">
+          <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+            {Array.from({ length: cols }).map((_, i) => <Shimmer key={i} className="h-3 w-20" />)}
+          </div>
+        </div>
+        {Array.from({ length: rows }).map((_, r) => (
+          <div key={r} className="border-b border-border p-3 last:border-b-0">
+            <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+              {Array.from({ length: cols }).map((_, c) => <Shimmer key={c} className="h-4 w-full max-w-24" />)}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function OverviewSkeleton() {
+  return (
+    <div className="space-y-6">
+      <SummaryCardsSkeleton />
+      <ChartSkeleton title="Daily net received" />
+      <ChartSkeleton title="Monthly cashflow" />
+      <TableSkeleton rows={5} cols={3} title="Upcoming Bosta cashouts" />
+    </div>
+  );
+}
 
 function ErrorBox({ errors }: { errors: string[] }) {
   return (
