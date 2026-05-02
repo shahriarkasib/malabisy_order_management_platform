@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Package, ScrollText, Store, Settings, BarChart3, LogOut } from "lucide-react";
+import { LayoutDashboard, Package, ScrollText, Store, Settings, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { APP_NAME } from "@/lib/constants";
 
@@ -11,7 +11,6 @@ const NAV_ITEMS = [
   { href: "/orders", label: "Orders", icon: Package },
   { href: "/audit", label: "Audit Log", icon: ScrollText },
   { href: "/vendors", label: "Vendors", icon: Store },
-  { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 

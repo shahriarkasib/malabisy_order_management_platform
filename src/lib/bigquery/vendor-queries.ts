@@ -97,6 +97,16 @@ export async function fetchVendorProducts(vendors: string[], opts: { limit?: num
       -- inventory_items.cost is NUMERIC stored as STRING in Shopify; cast safely.
       SELECT id AS inventory_item_id, SAFE_CAST(cost AS NUMERIC) AS cost
       FROM \`${PROJECT}.shopify.inventory_items\`
+    ),
+    -- Pick the primary image per product (lowest position). Most variants don't
+    -- have a dedicated image, so we fall back to the product-level image here.
+    product_images AS (
+      SELECT product_id, src FROM (
+        SELECT product_id, src,
+          ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY IFNULL(position, 999) ASC) AS rn
+        FROM \`${PROJECT}.shopify.product_images\`
+        WHERE src IS NOT NULL
+      ) WHERE rn = 1
     )
     SELECT
       CAST(p.id AS STRING)            AS product_id,
@@ -112,7 +122,7 @@ export async function fetchVendorProducts(vendors: string[], opts: { limit?: num
       SAFE_CAST(v.compare_at_price AS FLOAT64) AS compare_at_price,
       CAST(ic.cost AS FLOAT64)         AS cost,
       il.available_total               AS inventory_quantity,
-      v.image_src                      AS image_src,
+      COALESCE(v.image_src, pi.src)    AS image_src,
       SAFE_CAST(co.latest.new_value AS FLOAT64) AS cost_pending,
       SAFE_CAST(po.latest.new_value AS FLOAT64) AS price_pending,
       SAFE_CAST(io.latest.new_value AS INT64)   AS inventory_pending
@@ -123,6 +133,7 @@ export async function fetchVendorProducts(vendors: string[], opts: { limit?: num
     LEFT JOIN cost_overlay co ON co.inventory_item_id = v.inventory_item_id
     LEFT JOIN price_overlay po ON po.variant_id = v.id
     LEFT JOIN inv_overlay io ON io.inventory_item_id = v.inventory_item_id
+    LEFT JOIN product_images pi ON pi.product_id = p.id
     WHERE p.vendor IN UNNEST(@vendors)
       AND (
         @search = ""
