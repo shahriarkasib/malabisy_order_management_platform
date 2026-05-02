@@ -127,7 +127,8 @@ export async function fetchMonthlyCashflow(months = 12): Promise<MonthlyCashflow
           - IFNULL(cash_cycle_flex_ship_fees,0) - IFNULL(cash_cycle_fulfillment_fees,0)) AS bosta_net
       FROM \`${PROJECT}.bosta.deliveries_detail\`
       WHERE state_code = 45
-        AND updated_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${months} MONTH)
+        -- TIMESTAMP_SUB doesn't support MONTH, so we cast to DATE for the cutoff.
+        AND DATE(updated_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL ${months} MONTH)
       GROUP BY month
     ),
     logestechs AS (
@@ -136,7 +137,7 @@ export async function fetchMonthlyCashflow(months = 12): Promise<MonthlyCashflow
         SUM(IFNULL(net_cod, 0)) AS logestechs_net
       FROM \`${PROJECT}.bronze.logestechs_deliveries\`
       WHERE status = 'DELIVERED_TO_RECIPIENT'
-        AND COALESCE(delivery_date, _synced_at) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${months} MONTH)
+        AND DATE(COALESCE(delivery_date, _synced_at)) >= DATE_SUB(CURRENT_DATE(), INTERVAL ${months} MONTH)
       GROUP BY month
     )
     SELECT
