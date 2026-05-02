@@ -197,7 +197,7 @@ export async function fetchMonthlyCashflow(months = 12, filter?: FinanceFilter):
       ${monthsClauseBosta}
       ${c.vendorClauseBosta}
     GROUP BY month
-  ` : `SELECT '' AS month, 0.0 AS bosta_net WHERE FALSE`;
+  ` : `SELECT month, bosta_net FROM UNNEST(ARRAY<STRUCT<month STRING, bosta_net FLOAT64>>[])`;
 
   const logCte = c.wantLogestechs ? `
     SELECT
@@ -209,7 +209,7 @@ export async function fetchMonthlyCashflow(months = 12, filter?: FinanceFilter):
       ${monthsClauseLog}
       ${c.vendorClauseLog}
     GROUP BY month
-  ` : `SELECT '' AS month, 0.0 AS logestechs_net WHERE FALSE`;
+  ` : `SELECT month, logestechs_net FROM UNNEST(ARRAY<STRUCT<month STRING, logestechs_net FLOAT64>>[])`;
 
   const sql = `
     WITH bosta AS (${bostaCte}),
