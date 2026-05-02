@@ -11,15 +11,22 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 export const metadata: Metadata = { title: "Finance" };
 export const dynamic = "force-dynamic";
 
-function fmtUSD(egp: number, rate: number): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(egp / rate);
-}
-
 export default async function FinancePage() {
+  // Each query is awaited individually + caught so a failure in one doesn't
+  // bring down the whole page. Errors surface in Vercel logs with context.
   const [summary, monthly, upcoming] = await Promise.all([
-    fetchCashflowSummary(),
-    fetchMonthlyCashflow(12),
-    fetchUpcomingCashouts(21),
+    fetchCashflowSummary().catch((e) => {
+      console.error("[finance] fetchCashflowSummary failed:", e);
+      throw new Error(`fetchCashflowSummary: ${(e as Error).message}`);
+    }),
+    fetchMonthlyCashflow(12).catch((e) => {
+      console.error("[finance] fetchMonthlyCashflow failed:", e);
+      throw new Error(`fetchMonthlyCashflow: ${(e as Error).message}`);
+    }),
+    fetchUpcomingCashouts(21).catch((e) => {
+      console.error("[finance] fetchUpcomingCashouts failed:", e);
+      throw new Error(`fetchUpcomingCashouts: ${(e as Error).message}`);
+    }),
   ]);
 
   const cards = [
@@ -46,7 +53,7 @@ export default async function FinancePage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Finance</h1>
         <p className="text-sm text-muted-foreground">
-          Money collected by couriers and what's coming to Malabisy's bank · 1 USD ≈ {summary.egp_per_usd} EGP
+          Money collected by couriers and what's coming to Malabisy's bank.
         </p>
       </div>
 
@@ -63,7 +70,6 @@ export default async function FinancePage() {
               <p className="mt-3 text-3xl font-bold tabular-nums">
                 {formatCurrency(c.total, "EGP")}
               </p>
-              <p className="text-xs text-muted-foreground">≈ {fmtUSD(c.total, summary.egp_per_usd)}</p>
               <div className="mt-4 grid grid-cols-2 gap-4 border-t border-border pt-3 text-sm">
                 <div>
                   <p className="text-xs text-muted-foreground">Bosta</p>
@@ -113,22 +119,18 @@ export default async function FinancePage() {
                 <th className="px-3 py-2 font-medium">Month</th>
                 <th className="px-3 py-2 text-right font-medium">Bosta</th>
                 <th className="px-3 py-2 text-right font-medium">Logestechs</th>
-                <th className="px-3 py-2 text-right font-medium">Total EGP</th>
-                <th className="px-3 py-2 text-right font-medium">Total USD</th>
+                <th className="px-3 py-2 text-right font-medium">Total</th>
               </tr>
             </thead>
             <tbody>
               {monthly.length === 0 ? (
-                <tr><td colSpan={5} className="px-3 py-12 text-center text-muted-foreground">No data yet.</td></tr>
+                <tr><td colSpan={4} className="px-3 py-12 text-center text-muted-foreground">No data yet.</td></tr>
               ) : monthly.map((m) => (
                 <tr key={m.month} className="border-t border-border">
                   <td className="px-3 py-2 font-medium">{m.month}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(m.bosta_net, "EGP")}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(m.logestechs_net, "EGP")}</td>
                   <td className="px-3 py-2 text-right font-semibold tabular-nums">{formatCurrency(m.total_net_egp, "EGP")}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
-                    {fmtUSD(m.total_net_egp, summary.egp_per_usd)}
-                  </td>
                 </tr>
               ))}
             </tbody>
@@ -151,13 +153,12 @@ export default async function FinancePage() {
               <tr>
                 <th className="px-3 py-2 font-medium">Cashout date</th>
                 <th className="px-3 py-2 text-right font-medium">Parcels</th>
-                <th className="px-3 py-2 text-right font-medium">Net EGP</th>
-                <th className="px-3 py-2 text-right font-medium">≈ USD</th>
+                <th className="px-3 py-2 text-right font-medium">Expected net</th>
               </tr>
             </thead>
             <tbody>
               {upcoming.length === 0 ? (
-                <tr><td colSpan={4} className="px-3 py-12 text-center text-muted-foreground">No upcoming cashouts in the next 21 days.</td></tr>
+                <tr><td colSpan={3} className="px-3 py-12 text-center text-muted-foreground">No upcoming cashouts in the next 21 days.</td></tr>
               ) : upcoming.map((u) => (
                 <tr key={u.cashout_date} className="border-t border-border">
                   <td className="px-3 py-2 font-medium">
@@ -165,7 +166,6 @@ export default async function FinancePage() {
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">{u.parcels.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right font-semibold tabular-nums">{formatCurrency(u.expected_net_egp, "EGP")}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{fmtUSD(u.expected_net_egp, summary.egp_per_usd)}</td>
                 </tr>
               ))}
             </tbody>
