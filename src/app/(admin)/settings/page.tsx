@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import { requireInternal } from "@/lib/auth/server";
 import { fetchAdminAccounts, fetchSystemStatus } from "@/lib/bigquery/settings-queries";
-import { formatDateTime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, AlertCircle, Clock } from "lucide-react";
+import { RefreshButton } from "@/components/admin/refresh-button";
+import { AdminsTable } from "@/components/admin/admins-table";
 
 export const metadata: Metadata = { title: "Settings" };
 export const dynamic = "force-dynamic";
@@ -19,19 +20,24 @@ export default async function SettingsPage() {
   const session = await requireInternal();
   const [admins, status] = await Promise.all([fetchAdminAccounts(), fetchSystemStatus()]);
 
-  const dataSources = [
-    { name: "Warehouse query (gold rebuild)", minutesAgo: status.last_warehouse_run_minutes_ago, healthy: 70, expected: "every 1 hour" },
-    { name: "Bosta sync",                      minutesAgo: status.last_bosta_sync_minutes_ago,    healthy: 30, expected: "every 15-30 min" },
-    { name: "Shopify webhook (last event)",    minutesAgo: status.last_shopify_webhook_minutes_ago, healthy: 60, expected: "live, on order changes" },
+  const dataSources: Array<{
+    name: string;
+    minutesAgo: number | null;
+    healthy: number;
+    expected: string;
+    refresh: "warehouse" | "shopify" | "bosta" | null;
+  }> = [
+    { name: "Warehouse query (gold rebuild)", minutesAgo: status.last_warehouse_run_minutes_ago, healthy: 70, expected: "every 1 hour",      refresh: "warehouse" },
+    { name: "Bosta sync",                      minutesAgo: status.last_bosta_sync_minutes_ago,    healthy: 30, expected: "every 15-30 min",  refresh: "bosta" },
+    { name: "Shopify webhook (last event)",    minutesAgo: status.last_shopify_webhook_minutes_ago, healthy: 60, expected: "live, on order changes", refresh: null },
+    { name: "Shopify bulk sync (CF)",          minutesAgo: null,                                  healthy: 720, expected: "every 6 hours",   refresh: "shopify" },
   ];
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
-        <p className="text-sm text-muted-foreground">
-          System status, admin team, and data source health.
-        </p>
+        <p className="text-sm text-muted-foreground">Your account, data freshness, and admin team.</p>
       </div>
 
       {/* Your account */}
@@ -56,11 +62,11 @@ export default async function SettingsPage() {
         </dl>
       </section>
 
-      {/* Data freshness */}
+      {/* Data freshness with manual triggers */}
       <section className="rounded-xl border border-border bg-card p-6 space-y-4">
         <div>
           <h2 className="text-base font-semibold">Data freshness</h2>
-          <p className="text-xs text-muted-foreground">Last refresh of each upstream pipeline.</p>
+          <p className="text-xs text-muted-foreground">Each pipeline runs on its own schedule. Click "Refresh now" to trigger immediately.</p>
         </div>
         <div className="space-y-2">
           {dataSources.map((src) => {
@@ -72,76 +78,33 @@ export default async function SettingsPage() {
                   <Icon className={
                     f.variant === "success" ? "size-4 text-emerald-500"
                     : f.variant === "warning" ? "size-4 text-amber-500"
-                    : "size-4 text-destructive"
+                    : f.variant === "destructive" ? "size-4 text-destructive"
+                    : "size-4 text-muted-foreground"
                   } />
                   <div>
                     <p className="text-sm font-medium">{src.name}</p>
                     <p className="text-xs text-muted-foreground">Expected: {src.expected}</p>
                   </div>
                 </div>
-                <Badge variant={f.variant}>{f.label}</Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant={f.variant}>{f.label}</Badge>
+                  {src.refresh && <RefreshButton source={src.refresh} label={src.name} />}
+                </div>
               </div>
             );
           })}
         </div>
       </section>
 
-      {/* Volume snapshot */}
-      <section className="rounded-xl border border-border bg-card p-6">
-        <h2 className="text-base font-semibold">Volume snapshot</h2>
-        <p className="text-xs text-muted-foreground">Counts across the data warehouse, refreshed on every page load.</p>
-        <dl className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
-          {[
-            { label: "Shopify orders (Airbyte)", value: status.shopify_orders_count },
-            { label: "Realtime orders (webhook)", value: status.shopify_realtime_orders },
-            { label: "Realtime line items", value: status.shopify_realtime_line_items },
-            { label: "Bosta deliveries", value: status.bosta_deliveries_count },
-            { label: "Vendor users", value: status.vendor_users_count },
-            { label: "Vendor edits (30d)", value: status.vendor_edits_30d },
-            { label: "Ops actions (30d)", value: status.ops_actions_30d },
-          ].map((s) => (
-            <div key={s.label} className="rounded-md bg-muted/40 p-3">
-              <dt className="text-xs text-muted-foreground">{s.label}</dt>
-              <dd className="mt-1 text-xl font-bold tabular-nums">{s.value.toLocaleString()}</dd>
-            </div>
-          ))}
-        </dl>
-      </section>
-
-      {/* Admin accounts */}
+      {/* Admin team */}
       <section className="rounded-xl border border-border bg-card p-6 space-y-3">
         <div>
           <h2 className="text-base font-semibold">Admin team</h2>
           <p className="text-xs text-muted-foreground">
-            Admins can see every page and edit on every vendor's behalf. Add/remove via direct row in <code>ops.vendor_accounts</code>.
+            Admins can see every page, manage vendors, and trigger pipelines. You can't remove yourself.
           </p>
         </div>
-        <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/40 text-left">
-              <tr>
-                <th className="px-3 py-2 font-medium">Email</th>
-                <th className="px-3 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Active</th>
-                <th className="px-3 py-2 font-medium">Created</th>
-                <th className="px-3 py-2 font-medium">Last login</th>
-              </tr>
-            </thead>
-            <tbody>
-              {admins.map((a) => (
-                <tr key={a.email} className="border-t border-border">
-                  <td className="px-3 py-2 font-medium">{a.email}</td>
-                  <td className="px-3 py-2">{a.display_name || "—"}</td>
-                  <td className="px-3 py-2">
-                    {a.active ? <Badge variant="success">active</Badge> : <Badge variant="destructive">disabled</Badge>}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">{formatDateTime(a.created_at)}</td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">{a.last_login_at ? formatDateTime(a.last_login_at) : "never"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <AdminsTable admins={admins} currentUserEmail={session.email} />
       </section>
 
       {/* Pipeline links */}

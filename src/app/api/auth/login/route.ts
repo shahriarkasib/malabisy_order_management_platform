@@ -61,12 +61,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "no_vendor_access" }, { status: 403 });
   }
 
-  // Best-effort: stamp last_login_at. Don't block login on this.
-  bq.query({
-    query: `UPDATE \`${PROJECT}.ops.vendor_accounts\` SET last_login_at = CURRENT_TIMESTAMP() WHERE LOWER(email) = @email`,
-    params: { email },
-    types: { email: "STRING" },
-  }).catch(() => {});
+  // Stamp last_login_at. Awaited so Vercel doesn't kill the runtime mid-UPDATE
+  // (fire-and-forget was silently dropping the writes — last_login_at stayed NULL).
+  // The cost is ~500ms added to login; acceptable.
+  try {
+    await bq.query({
+      query: `UPDATE \`${PROJECT}.ops.vendor_accounts\` SET last_login_at = CURRENT_TIMESTAMP() WHERE LOWER(email) = @email`,
+      params: { email },
+      types: { email: "STRING" },
+    });
+  } catch (e) {
+    console.warn("[auth] last_login_at update failed:", (e as Error).message);
+  }
 
   const token = await signSession({
     email: row.email,
