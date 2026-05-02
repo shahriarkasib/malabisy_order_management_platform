@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Package, ScrollText, Store, Settings, LogOut } from "lucide-react";
+import { Package, ScrollText, Store, Settings, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { APP_NAME } from "@/lib/constants";
 
+// Orders is the home. The old "Dashboard" was just a launcher with cards
+// pointing to these same items — redundant with the sidebar itself.
 const NAV_ITEMS = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/orders", label: "Orders", icon: Package },
   { href: "/audit", label: "Audit Log", icon: ScrollText },
   { href: "/vendors", label: "Vendors", icon: Store },
