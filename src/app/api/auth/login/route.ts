@@ -1,5 +1,16 @@
+/**
+ * Email-only login. No password.
+ *
+ * The allowlist lives in BQ: ops.vendor_accounts. If the email is there and
+ * active, we sign a session. This is the same simplicity Slack/Notion give
+ * for invite-only workspaces — the security boundary is "Malabisy controls
+ * who's in the table."
+ *
+ * Migrate to Clerk for SSO + magic links when this graduates from internal-tool
+ * stage. For now, the threat model is: ops admins manage who has access in BQ.
+ */
+
 import { NextRequest, NextResponse } from "next/server";
-import bcrypt from "bcryptjs";
 import { getBigQuery } from "@/lib/bigquery/client";
 import { signSession, SESSION_COOKIE, SESSION_TTL_SECONDS } from "@/lib/auth/session";
 
@@ -9,7 +20,6 @@ const PROJECT = process.env.GCP_PROJECT_ID || "malabisy-data";
 
 interface LoginBody {
   email?: string;
-  password?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -21,18 +31,16 @@ export async function POST(req: NextRequest) {
   }
 
   const email = (body.email || "").trim().toLowerCase();
-  const password = body.password || "";
-  if (!email || !password) {
-    return NextResponse.json({ error: "missing_credentials" }, { status: 400 });
+  if (!email) {
+    return NextResponse.json({ error: "email_required" }, { status: 400 });
   }
 
-  // Look up the account + their vendor mappings in one query.
   const bq = getBigQuery();
   const [rows] = await bq.query({
     query: `
-      SELECT a.email, a.password_hash, a.role, a.display_name,
+      SELECT a.email, a.role, a.display_name,
              ARRAY(SELECT v.vendor FROM \`${PROJECT}.ops.vendor_user_access\` v
-                   WHERE v.email = a.email) AS vendors
+                   WHERE LOWER(v.email) = LOWER(a.email)) AS vendors
       FROM \`${PROJECT}.ops.vendor_accounts\` a
       WHERE LOWER(a.email) = @email AND a.active = TRUE
     `,
@@ -41,19 +49,19 @@ export async function POST(req: NextRequest) {
   });
 
   const row = rows[0] as
-    | { email: string; password_hash: string | null; role: string; display_name: string | null; vendors: string[] }
+    | { email: string; role: string; display_name: string | null; vendors: string[] }
     | undefined;
 
-  if (!row || !row.password_hash) {
-    // Constant-time-ish: still hash the input even if we know it'll fail.
-    await bcrypt.compare(password, "$2b$10$".padEnd(60, "x"));
-    return NextResponse.json({ error: "invalid_credentials" }, { status: 401 });
+  if (!row) {
+    return NextResponse.json({ error: "not_authorized" }, { status: 401 });
   }
 
-  const ok = await bcrypt.compare(password, row.password_hash);
-  if (!ok) return NextResponse.json({ error: "invalid_credentials" }, { status: 401 });
+  // Owners must have at least one vendor mapped, else they'd be locked out.
+  if (row.role === "owner" && (!row.vendors || row.vendors.length === 0)) {
+    return NextResponse.json({ error: "no_vendor_access" }, { status: 403 });
+  }
 
-  // best-effort: bump last_login_at, don't fail the login if it errors
+  // Best-effort: stamp last_login_at. Don't block login on this.
   bq.query({
     query: `UPDATE \`${PROJECT}.ops.vendor_accounts\` SET last_login_at = CURRENT_TIMESTAMP() WHERE LOWER(email) = @email`,
     params: { email },

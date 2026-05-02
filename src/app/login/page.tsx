@@ -11,7 +11,6 @@ function LoginForm() {
   const initialError = params.get("error");
 
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(
     initialError === "no_vendor_access" ? "Your account has no vendor access — contact ops." : null,
   );
@@ -25,17 +24,23 @@ function LoginForm() {
       const r = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email }),
       });
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
-        setError(body.error === "invalid_credentials" ? "Wrong email or password." : "Login failed.");
+        if (body.error === "not_authorized") {
+          setError("This email isn't on the allowlist. Ask Malabisy ops to invite you.");
+        } else if (body.error === "no_vendor_access") {
+          setError("Account exists but has no vendor mapped — contact ops.");
+        } else {
+          setError("Sign in failed.");
+        }
         setSubmitting(false);
         return;
       }
       const body = await r.json();
-      router.push(body.role === "internal" ? "/orders" : "/vendor");
-    } catch (e) {
+      router.push(body.role === "internal" ? "/orders" : "/vendor/products");
+    } catch {
       setError("Network error. Try again.");
       setSubmitting(false);
     }
@@ -58,23 +63,12 @@ function LoginForm() {
             <Input
               id="email"
               type="email"
-              autoComplete="username"
+              autoComplete="email"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@vendor.com"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="password" className="text-sm font-medium">Password</label>
-            <Input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              placeholder="you@malabisy.com"
+              autoFocus
             />
           </div>
 
@@ -84,13 +78,13 @@ function LoginForm() {
             </p>
           )}
 
-          <Button type="submit" className="w-full" disabled={submitting}>
-            {submitting ? "Signing in…" : "Sign in"}
+          <Button type="submit" className="w-full" disabled={submitting || !email}>
+            {submitting ? "Signing in…" : "Continue"}
           </Button>
         </form>
 
         <p className="text-xs text-muted-foreground">
-          Trouble signing in? Contact <span className="font-medium">ops@malabisy.com</span>.
+          Need access? Contact <span className="font-medium">ops@malabisy.com</span>.
         </p>
       </div>
     </div>

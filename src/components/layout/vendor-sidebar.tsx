@@ -2,15 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Package, ShoppingCart, ChartColumn, Settings, LogOut } from "lucide-react";
+import { Package, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV = [
-  { href: "/vendor",           label: "Dashboard",  icon: LayoutDashboard },
-  { href: "/vendor/products",  label: "Products",   icon: Package },
-  { href: "/vendor/orders",    label: "Orders",     icon: ShoppingCart },
-  { href: "/vendor/analytics", label: "Analytics",  icon: ChartColumn },
-  { href: "/vendor/settings",  label: "Settings",   icon: Settings },
+  { href: "/vendor/products", label: "Products", icon: Package },
 ];
 
 export function VendorSidebar({ displayName, vendors }: { displayName: string; vendors: string[] }) {
@@ -25,7 +21,7 @@ export function VendorSidebar({ displayName, vendors }: { displayName: string; v
 
       <nav className="flex flex-col gap-1 p-3">
         {NAV.map((item) => {
-          const active = item.href === "/vendor" ? pathname === item.href : pathname.startsWith(item.href);
+          const active = pathname.startsWith(item.href);
           const Icon = item.icon;
           return (
             <Link

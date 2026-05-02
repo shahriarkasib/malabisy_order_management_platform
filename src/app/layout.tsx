@@ -2,8 +2,6 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import { Suspense } from "react";
-import { Sidebar } from "@/components/layout/sidebar";
-import { Header } from "@/components/layout/header";
 import { NavProgress } from "@/components/layout/nav-progress";
 import { APP_NAME } from "@/lib/constants";
 import "./globals.css";
@@ -16,6 +14,13 @@ export const metadata: Metadata = {
   description: "Production-grade order management for Malabisy.",
 };
 
+/**
+ * Root layout — minimal. Just html, body, fonts, toaster, nav progress bar.
+ * The actual app shell (sidebar / header) lives in role-specific layouts:
+ *   - src/app/(admin)/layout.tsx for internal staff
+ *   - src/app/vendor/layout.tsx  for vendor partners
+ *   - /login renders bare (no shell)
+ */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
@@ -23,15 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Suspense fallback={null}>
           <NavProgress />
         </Suspense>
-        <div className="flex h-screen overflow-hidden">
-          <Sidebar />
-          <div className="flex flex-1 flex-col overflow-hidden">
-            <Header />
-            <main className="flex-1 overflow-y-auto bg-background">
-              <div className="mx-auto max-w-[1600px] px-6 py-6">{children}</div>
-            </main>
-          </div>
-        </div>
+        {children}
         <Toaster position="top-right" richColors closeButton />
       </body>
     </html>
