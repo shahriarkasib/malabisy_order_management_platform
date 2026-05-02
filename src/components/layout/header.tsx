@@ -1,8 +1,9 @@
 "use client";
 
-import { Bell, Search, User } from "lucide-react";
+import { Search, User } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { NotificationsBell } from "./notifications-bell";
 
 export function Header() {
   return (
@@ -12,9 +13,7 @@ export function Header() {
         <Input placeholder="Search orders, SKUs, customers…" className="pl-9" />
       </div>
       <div className="ml-auto flex items-center gap-2">
-        <Button variant="ghost" size="icon" aria-label="Notifications">
-          <Bell className="size-4" />
-        </Button>
+        <NotificationsBell />
         <Button variant="ghost" size="icon" aria-label="Account">
           <User className="size-4" />
         </Button>
