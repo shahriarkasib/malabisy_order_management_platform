@@ -9,23 +9,29 @@ export const metadata: Metadata = { title: "Audit Log" };
 export const dynamic = "force-dynamic";
 
 interface Props {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; vendor?: string }>;
 }
 
 export default async function AuditPage({ searchParams }: Props) {
   const sp = await searchParams;
   const tab = sp.tab === "vendor-edits" ? "vendor-edits" : "ops";
+  const vendorFilter = sp.vendor || undefined;
 
   const [opsEntries, vendorEdits] = await Promise.all([
-    fetchAuditLog({ limit: 200, days: 7 }),
-    fetchVendorEdits({ limit: 200, days: 7 }),
+    fetchAuditLog({ limit: 200, days: 30 }),
+    fetchVendorEdits({ limit: 500, days: 30, vendor: vendorFilter }),
   ]);
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Audit Log</h1>
-        <p className="text-sm text-muted-foreground">Last 7 days · all role-based activity.</p>
+        <p className="text-sm text-muted-foreground">
+          Last 30 days · all role-based activity.
+          {vendorFilter && (
+            <> · Filtered to <span className="font-medium">{vendorFilter}</span> · <Link href="/audit?tab=vendor-edits" className="text-primary underline">clear filter</Link></>
+          )}
+        </p>
       </div>
 
       {/* Tabs */}

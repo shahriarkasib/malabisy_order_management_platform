@@ -80,6 +80,13 @@ export async function fetchVendorsWithUsers(): Promise<VendorWithUsers[]> {
     user_count: Number(r.user_count),
     product_count: Number(r.product_count),
     active_product_count: Number(r.active_product_count),
+    edits_total: Number(r.edits_total ?? 0),
+    edits_synced: Number(r.edits_synced ?? 0),
+    edits_pending: Number(r.edits_pending ?? 0),
+    edits_failed: Number(r.edits_failed ?? 0),
+    last_edit_at: r.last_edit_at && typeof r.last_edit_at === "object" && "value" in r.last_edit_at
+      ? String((r.last_edit_at as { value: string }).value)
+      : (r.last_edit_at ? String(r.last_edit_at) : null),
   })) as VendorWithUsers[];
 }
 

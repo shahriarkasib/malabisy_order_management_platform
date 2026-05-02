@@ -1,11 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Plus, X, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { formatDateTime } from "@/lib/utils";
 import type { VendorWithUsers } from "@/lib/bigquery/admin-queries";
 
 export function VendorAccessTable({ vendors }: { vendors: VendorWithUsers[] }) {
@@ -86,6 +88,7 @@ export function VendorAccessTable({ vendors }: { vendors: VendorWithUsers[] }) {
             <tr className="text-left">
               <th className="px-4 py-3 font-medium">Vendor</th>
               <th className="px-4 py-3 text-right font-medium">Active products</th>
+              <th className="px-4 py-3 font-medium">Edits sync</th>
               <th className="px-4 py-3 font-medium">Users with access</th>
               <th className="px-4 py-3"></th>
             </tr>
@@ -105,6 +108,9 @@ export function VendorAccessTable({ vendors }: { vendors: VendorWithUsers[] }) {
                     <span title={tooltip} className="cursor-help underline-offset-4 decoration-dotted hover:underline">
                       {v.active_product_count.toLocaleString()}
                     </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <SyncStatsCell vendor={v} />
                   </td>
                   <td className="px-4 py-3">
                     {v.users.length === 0 ? (
@@ -163,7 +169,7 @@ export function VendorAccessTable({ vendors }: { vendors: VendorWithUsers[] }) {
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-4 py-12 text-center text-muted-foreground">
+                <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground">
                   No vendors match.
                 </td>
               </tr>
@@ -172,5 +178,41 @@ export function VendorAccessTable({ vendors }: { vendors: VendorWithUsers[] }) {
         </table>
       </div>
     </div>
+  );
+}
+
+/**
+ * Per-vendor edit sync visualization.
+ *
+ *   "Edits" = entries in ops.vendor_edits for this vendor
+ *   synced  = superseded_at IS NOT NULL  → Shopify caught up, override retired
+ *   pending = success but Shopify-side hasn't reflected it yet (next bulk-sync window)
+ *   failed  = the Shopify call itself rejected (audit logs the 4xx/5xx)
+ *
+ * Click a number to drill into /audit?tab=vendor-edits filtered by this vendor.
+ */
+function SyncStatsCell({ vendor: v }: { vendor: VendorWithUsers }) {
+  if (v.edits_total === 0) {
+    return <span className="text-xs text-muted-foreground">—</span>;
+  }
+  const drillUrl = `/audit?tab=vendor-edits&vendor=${encodeURIComponent(v.vendor)}`;
+  const syncedPct = (v.edits_synced / v.edits_total) * 100;
+  const pendingPct = (v.edits_pending / v.edits_total) * 100;
+  const failedPct = (v.edits_failed / v.edits_total) * 100;
+
+  return (
+    <Link href={drillUrl} className="block min-w-[180px] hover:opacity-80" title={v.last_edit_at ? `Last edit: ${formatDateTime(v.last_edit_at)}` : ""}>
+      <div className="flex items-baseline gap-1.5 text-xs">
+        <span className="font-medium tabular-nums">{v.edits_synced}</span>
+        <span className="text-muted-foreground">/{v.edits_total} synced</span>
+        {v.edits_pending > 0 && <span className="text-amber-600">· {v.edits_pending} pending</span>}
+        {v.edits_failed > 0 && <span className="text-destructive">· {v.edits_failed} failed</span>}
+      </div>
+      <div className="mt-1 flex h-1.5 overflow-hidden rounded-full bg-muted">
+        <div className="bg-emerald-500" style={{ width: `${syncedPct}%` }} />
+        <div className="bg-amber-500"   style={{ width: `${pendingPct}%` }} />
+        <div className="bg-destructive" style={{ width: `${failedPct}%` }} />
+      </div>
+    </Link>
   );
 }
