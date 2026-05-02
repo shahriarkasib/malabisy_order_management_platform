@@ -239,6 +239,48 @@ export async function fetchAuditLog(opts: { limit?: number; days?: number } = {}
   return plainify(rows as AuditEntry[]);
 }
 
+export interface VendorEditEntry {
+  edit_id: string;
+  edited_at: string;
+  actor_email: string;
+  vendor: string;
+  product_id: string | null;
+  variant_id: string | null;
+  field: string;
+  old_value: string | null;
+  new_value: string | null;
+  shopify_status: string | null;
+  final_status: string | null;
+  error_message: string | null;
+  superseded_at: string | null;
+}
+
+export async function fetchVendorEdits(opts: { limit?: number; days?: number; vendor?: string } = {}): Promise<VendorEditEntry[]> {
+  const bq = getBigQuery();
+  const { limit = 200, days = 7, vendor } = opts;
+
+  const sql = `
+    SELECT
+      edit_id, edited_at, actor_email, vendor,
+      CAST(product_id AS STRING) AS product_id,
+      CAST(variant_id AS STRING) AS variant_id,
+      field, old_value, new_value,
+      shopify_status, final_status, error_message, superseded_at
+    FROM \`${PROJECT}.ops.vendor_edits\`
+    WHERE edited_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+      ${vendor ? "AND vendor = @vendor" : ""}
+    ORDER BY edited_at DESC
+    LIMIT @limit
+  `;
+
+  const [rows] = await bq.query({
+    query: sql,
+    params: { limit, days, vendor: vendor ?? null },
+    types: { limit: "INT64", days: "INT64", vendor: "STRING" },
+  });
+  return plainify(rows as VendorEditEntry[]);
+}
+
 /** Cache vendor list aggressively — they almost never change. */
 export const fetchVendors = unstable_cache(
   async (): Promise<string[]> => {
