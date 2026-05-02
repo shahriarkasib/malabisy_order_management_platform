@@ -101,10 +101,22 @@ export function ActionBar({ selectedRows, onActionComplete, actorEmail }: Props)
       const row = selectedRows.find((r) => r.order_id === orderId)!;
       try {
         if (action === "cancel") {
+          // Pass courier info so the CF terminates the AWB on Bosta/Logestechs.
+          // Without this, the order cancels in Shopify but the package keeps
+          // moving on the courier's side and gets delivered anyway (#36067 bug).
+          const courier = row.bosta_delivery_id
+            ? "Bosta"
+            : row.logestechs_shipment_id
+              ? "Logestechs"
+              : null;
           await callAction("cancel-order", {
             shopify_order_id: orderId,
             actor_email: actorEmail,
             reason: "ops_cancel",
+            courier,
+            bosta_delivery_id: row.bosta_delivery_id,
+            logestechs_shipment_id: row.logestechs_shipment_id,
+            tracking_number: row.tracking_number,
           });
         } else if (action === "confirm") {
           await callAction("confirm-order", { shopify_order_id: orderId, actor_email: actorEmail });
