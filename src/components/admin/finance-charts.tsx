@@ -49,8 +49,10 @@ export function DailyNetChart({ points }: { points: DailyPoint[] }) {
               formatter={(v: unknown) => fmtEgp(typeof v === "number" ? v : 0)}
             />
             <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
-            <Area type="monotone" dataKey="bosta"      stackId="1" name="Bosta"      stroke={COLORS.bosta}      fill={COLORS.bosta}      fillOpacity={0.3} />
-            <Area type="monotone" dataKey="logestechs" stackId="1" name="Logestechs" stroke={COLORS.logestechs} fill={COLORS.logestechs} fillOpacity={0.3} />
+            {/* Smaller series rendered first = at the bottom of the stack, so the
+                dominant series (Bosta) caps the visual. The top stroke = total. */}
+            <Area type="monotone" dataKey="logestechs" stackId="1" name="Logestechs" stroke={COLORS.logestechs} fill={COLORS.logestechs} fillOpacity={0.6} />
+            <Area type="monotone" dataKey="bosta"      stackId="1" name="Bosta"      stroke={COLORS.bosta}      fill={COLORS.bosta}      fillOpacity={0.6} />
           </AreaChart>
         </ResponsiveContainer>
       </div>
@@ -88,8 +90,9 @@ export function MonthlyChart({ rows }: { rows: MonthlyCashflowRow[] }) {
               formatter={(v: unknown) => fmtEgp(typeof v === "number" ? v : 0)}
             />
             <Legend iconType="square" wrapperStyle={{ fontSize: 12 }} />
-            <Bar dataKey="bosta"      stackId="1" name="Bosta"      fill={COLORS.bosta} />
+            {/* Smaller series at the bottom so Bosta's color dominates the bar. */}
             <Bar dataKey="logestechs" stackId="1" name="Logestechs" fill={COLORS.logestechs} />
+            <Bar dataKey="bosta"      stackId="1" name="Bosta"      fill={COLORS.bosta} />
           </BarChart>
         </ResponsiveContainer>
       </div>

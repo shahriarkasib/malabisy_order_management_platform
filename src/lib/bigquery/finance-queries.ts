@@ -64,7 +64,6 @@ function clauses(filter: FinanceFilter | undefined) {
 
 // Pull from env so finance can adjust without redeploy. Default tracks April 2026.
 const EGP_PER_USD = Number(process.env.EGP_USD_RATE || 49);
-const LOGESTECHS_PAYOUT_LAG_DAYS = 14; // assumption: settlement ~2 weeks after delivery
 
 export interface CashflowSummary {
   bosta_received_egp: number;
@@ -133,14 +132,18 @@ export async function fetchCashflowSummary(filter?: FinanceFilter): Promise<Cash
       ${c.vendorClauseBosta}
   ` : `SELECT 0.0 AS received, 0.0 AS pending, 0.0 AS gross, 0.0 AS fees`;
 
+  // Logestechs uses payment_status (boolean from their own system) — TRUE means
+  // they've paid us, FALSE means delivered but not yet paid. (Earlier code used
+  // a 14-days-after-delivery heuristic which was completely wrong: of 134
+  // delivered Logestechs parcels, ALL have payment_status = FALSE per their
+  // API, so the heuristic was reporting fake "received" amounts.)
   const logCte = c.wantLogestechs ? `
     SELECT
-      SUM(IF(delivery_date < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${LOGESTECHS_PAYOUT_LAG_DAYS} DAY),
-             IFNULL(net_cod, 0), 0))                  AS received,
-      SUM(IF(delivery_date >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${LOGESTECHS_PAYOUT_LAG_DAYS} DAY),
-             IFNULL(net_cod, 0), 0))                  AS pending,
-      SUM(IFNULL(cod, 0))                             AS gross,
-      SUM(IFNULL(cod, 0) - IFNULL(net_cod, 0))        AS fees
+      SUM(IF(payment_status = TRUE,  IFNULL(net_cod, 0), 0))      AS received,
+      SUM(IF(payment_status = FALSE OR payment_status IS NULL,
+                                     IFNULL(net_cod, 0), 0))      AS pending,
+      SUM(IFNULL(cod, 0))                                          AS gross,
+      SUM(IFNULL(cod, 0) - IFNULL(net_cod, 0))                     AS fees
     FROM \`${PROJECT}.bronze.logestechs_deliveries\` ld
     WHERE status = 'DELIVERED_TO_RECIPIENT'
       ${c.logDate}
