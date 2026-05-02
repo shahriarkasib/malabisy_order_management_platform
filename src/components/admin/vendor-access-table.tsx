@@ -85,7 +85,7 @@ export function VendorAccessTable({ vendors }: { vendors: VendorWithUsers[] }) {
           <thead className="border-b border-border bg-muted/40">
             <tr className="text-left">
               <th className="px-4 py-3 font-medium">Vendor</th>
-              <th className="px-4 py-3 text-right font-medium">Products</th>
+              <th className="px-4 py-3 text-right font-medium">Active products</th>
               <th className="px-4 py-3 font-medium">Users with access</th>
               <th className="px-4 py-3"></th>
             </tr>
@@ -93,12 +93,18 @@ export function VendorAccessTable({ vendors }: { vendors: VendorWithUsers[] }) {
           <tbody>
             {filtered.map((v) => {
               const isAdding = adding === v.vendor;
+              const inactive = v.product_count - v.active_product_count;
+              const tooltip =
+                inactive > 0
+                  ? `${v.active_product_count.toLocaleString()} active, ${inactive.toLocaleString()} draft/archived (${v.product_count.toLocaleString()} total in Shopify)`
+                  : `All ${v.product_count.toLocaleString()} products are active`;
               return (
                 <tr key={v.vendor} className="border-b border-border last:border-b-0 align-top">
                   <td className="px-4 py-3 font-medium">{v.vendor}</td>
                   <td className="px-4 py-3 text-right tabular-nums">
-                    {v.active_product_count.toLocaleString()}
-                    <div className="text-[11px] text-muted-foreground">{v.product_count.toLocaleString()} total</div>
+                    <span title={tooltip} className="cursor-help underline-offset-4 decoration-dotted hover:underline">
+                      {v.active_product_count.toLocaleString()}
+                    </span>
                   </td>
                   <td className="px-4 py-3">
                     {v.users.length === 0 ? (
