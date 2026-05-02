@@ -3,31 +3,47 @@ import {
   fetchCashflowSummary,
   fetchMonthlyCashflow,
   fetchUpcomingCashouts,
+  type CashflowSummary,
+  type MonthlyCashflowRow,
+  type UpcomingCashout,
 } from "@/lib/bigquery/finance-queries";
 import { Badge } from "@/components/ui/badge";
-import { TrendingUp, Clock, Banknote, Wallet } from "lucide-react";
+import { TrendingUp, Clock, Banknote, Wallet, AlertCircle } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Finance" };
 export const dynamic = "force-dynamic";
 
+const EMPTY_SUMMARY: CashflowSummary = {
+  bosta_received_egp: 0, bosta_pending_egp: 0,
+  bosta_fees_30d_egp: 0, bosta_gross_30d_egp: 0,
+  logestechs_received_egp: 0, logestechs_pending_egp: 0,
+  logestechs_fees_30d_egp: 0, logestechs_gross_30d_egp: 0,
+  total_received_egp: 0, total_pending_egp: 0,
+  egp_per_usd: 49,
+};
+
+async function safe<T>(label: string, fn: () => Promise<T>, fallback: T): Promise<{ value: T; error?: string }> {
+  try {
+    return { value: await fn() };
+  } catch (e) {
+    const msg = (e as Error).message || String(e);
+    console.error(`[finance/${label}]`, e);
+    return { value: fallback, error: `${label}: ${msg}` };
+  }
+}
+
 export default async function FinancePage() {
-  // Each query is awaited individually + caught so a failure in one doesn't
-  // bring down the whole page. Errors surface in Vercel logs with context.
-  const [summary, monthly, upcoming] = await Promise.all([
-    fetchCashflowSummary().catch((e) => {
-      console.error("[finance] fetchCashflowSummary failed:", e);
-      throw new Error(`fetchCashflowSummary: ${(e as Error).message}`);
-    }),
-    fetchMonthlyCashflow(12).catch((e) => {
-      console.error("[finance] fetchMonthlyCashflow failed:", e);
-      throw new Error(`fetchMonthlyCashflow: ${(e as Error).message}`);
-    }),
-    fetchUpcomingCashouts(21).catch((e) => {
-      console.error("[finance] fetchUpcomingCashouts failed:", e);
-      throw new Error(`fetchUpcomingCashouts: ${(e as Error).message}`);
-    }),
+  const [summaryR, monthlyR, upcomingR] = await Promise.all([
+    safe("summary",  () => fetchCashflowSummary(),       EMPTY_SUMMARY),
+    safe("monthly",  () => fetchMonthlyCashflow(12),     [] as MonthlyCashflowRow[]),
+    safe("upcoming", () => fetchUpcomingCashouts(21),    [] as UpcomingCashout[]),
   ]);
+
+  const summary = summaryR.value;
+  const monthly = monthlyR.value;
+  const upcoming = upcomingR.value;
+  const queryErrors = [summaryR.error, monthlyR.error, upcomingR.error].filter(Boolean) as string[];
 
   const cards = [
     {
@@ -57,7 +73,20 @@ export default async function FinancePage() {
         </p>
       </div>
 
-      {/* Top: received + pending */}
+      {queryErrors.length > 0 && (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 space-y-2">
+          <div className="flex items-center gap-2 text-destructive">
+            <AlertCircle className="size-4" />
+            <p className="text-sm font-semibold">{queryErrors.length} query failed — showing defaults</p>
+          </div>
+          {queryErrors.map((err, i) => (
+            <pre key={i} className="overflow-x-auto whitespace-pre-wrap break-all text-xs text-destructive/80">
+              {err}
+            </pre>
+          ))}
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-2">
         {cards.map((c) => {
           const Icon = c.icon;
@@ -85,25 +114,15 @@ export default async function FinancePage() {
         })}
       </div>
 
-      {/* Fee breakdown */}
       <section className="rounded-xl border border-border bg-card p-6 space-y-3">
         <div>
           <h2 className="text-base font-semibold">Where the money went (last 30d)</h2>
           <p className="text-xs text-muted-foreground">For every EGP customers paid — what reached Malabisy vs courier fees.</p>
         </div>
-        <FeeBar
-          label="Bosta"
-          gross={summary.bosta_gross_30d_egp}
-          fees={summary.bosta_fees_30d_egp}
-        />
-        <FeeBar
-          label="Logestechs"
-          gross={summary.logestechs_gross_30d_egp}
-          fees={summary.logestechs_fees_30d_egp}
-        />
+        <FeeBar label="Bosta"      gross={summary.bosta_gross_30d_egp}      fees={summary.bosta_fees_30d_egp} />
+        <FeeBar label="Logestechs" gross={summary.logestechs_gross_30d_egp} fees={summary.logestechs_fees_30d_egp} />
       </section>
 
-      {/* Monthly trend */}
       <section className="rounded-xl border border-border bg-card p-6">
         <div className="flex items-center justify-between">
           <div>
@@ -138,7 +157,6 @@ export default async function FinancePage() {
         </div>
       </section>
 
-      {/* Upcoming Bosta cashouts */}
       <section className="rounded-xl border border-border bg-card p-6">
         <div className="flex items-center justify-between">
           <div>
