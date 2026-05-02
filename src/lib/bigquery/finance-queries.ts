@@ -10,8 +10,54 @@
  */
 
 import { getBigQuery } from "./client";
+import type { FinanceFilter } from "./finance-detail-queries";
 
 const PROJECT = process.env.GCP_PROJECT_ID || "malabisy-data";
+
+/**
+ * Translate a FinanceFilter into the SQL fragments each section needs:
+ *   - bosta date: comparison against bosta.deliveries_detail.updated_at
+ *   - log date:   comparison against COALESCE(delivery_date, _synced_at)
+ *   - vendor:     EXISTS subquery against gold.line_item_pipeline
+ *
+ * If startDate/endDate are blank we fall back to last 30 days so cards never
+ * show "all time" by accident on first load.
+ */
+function clauses(filter: FinanceFilter | undefined) {
+  const start = filter?.startDate;
+  const end = filter?.endDate;
+  const courier = filter?.courier ?? "All";
+  const vendor = filter?.vendor;
+
+  const bostaDate = [
+    start ? `AND DATE(updated_at) >= '${start}'` : `AND DATE(updated_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)`,
+    end   ? `AND DATE(updated_at) <= '${end}'`   : "",
+  ].join("\n        ");
+  const logDate = [
+    start ? `AND DATE(COALESCE(delivery_date, _synced_at)) >= '${start}'` : `AND DATE(COALESCE(delivery_date, _synced_at)) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)`,
+    end   ? `AND DATE(COALESCE(delivery_date, _synced_at)) <= '${end}'`   : "",
+  ].join("\n        ");
+
+  // Vendor filter narrows to deliveries containing at least one line item from
+  // that vendor. Same logic as the Orders tab.
+  const vendorClauseBosta = vendor
+    ? `AND EXISTS (SELECT 1 FROM \`${PROJECT}.gold.line_item_pipeline\` g
+                   WHERE g.tracking_number = bd.tracking_number AND g.vendor = '${vendor.replace(/'/g, "''")}')`
+    : "";
+  const vendorClauseLog = vendor
+    ? `AND EXISTS (SELECT 1 FROM \`${PROJECT}.gold.line_item_pipeline\` g
+                   WHERE g.tracking_number = ld.barcode AND g.vendor = '${vendor.replace(/'/g, "''")}')`
+    : "";
+
+  return {
+    wantBosta: courier === "All" || courier === "Bosta",
+    wantLogestechs: courier === "All" || courier === "Logestechs",
+    bostaDate,
+    logDate,
+    vendorClauseBosta,
+    vendorClauseLog,
+  };
+}
 
 // Pull from env so finance can adjust without redeploy. Default tracks April 2026.
 const EGP_PER_USD = Number(process.env.EGP_USD_RATE || 49);
@@ -31,61 +77,70 @@ export interface CashflowSummary {
   egp_per_usd: number;
 }
 
-export async function fetchCashflowSummary(): Promise<CashflowSummary> {
+export async function fetchCashflowSummary(filter?: FinanceFilter): Promise<CashflowSummary> {
   const bq = getBigQuery();
-  const sql = `
-    WITH bosta_30d AS (
-      SELECT
-        SUM(IF(next_cashout_date < CURRENT_TIMESTAMP(),
-               cash_cycle_cod
-               - IFNULL(cash_cycle_bosta_fees,0) - IFNULL(cash_cycle_shipping_fees,0)
-               - IFNULL(cash_cycle_collection_fees,0) - IFNULL(cash_cycle_cod_fees,0)
-               - IFNULL(cash_cycle_insurance_fees,0) - IFNULL(cash_cycle_expedite_fees,0)
-               - IFNULL(cash_cycle_vat,0) - IFNULL(cash_cycle_opening_package_fees,0)
-               - IFNULL(cash_cycle_flex_ship_fees,0) - IFNULL(cash_cycle_fulfillment_fees,0),
-               0)) AS received,
-        SUM(IF(next_cashout_date >= CURRENT_TIMESTAMP() OR next_cashout_date IS NULL,
-               IFNULL(cash_cycle_cod,0) - IFNULL(cash_cycle_bosta_fees,0)
-               - IFNULL(cash_cycle_shipping_fees,0) - IFNULL(cash_cycle_collection_fees,0)
-               - IFNULL(cash_cycle_cod_fees,0) - IFNULL(cash_cycle_insurance_fees,0)
-               - IFNULL(cash_cycle_expedite_fees,0) - IFNULL(cash_cycle_vat,0)
-               - IFNULL(cash_cycle_opening_package_fees,0) - IFNULL(cash_cycle_flex_ship_fees,0)
-               - IFNULL(cash_cycle_fulfillment_fees,0),
-               0)) AS pending,
-        SUM(IFNULL(cash_cycle_cod,0)) AS gross,
-        SUM(IFNULL(cash_cycle_bosta_fees,0) + IFNULL(cash_cycle_shipping_fees,0)
-          + IFNULL(cash_cycle_collection_fees,0) + IFNULL(cash_cycle_cod_fees,0)
-          + IFNULL(cash_cycle_insurance_fees,0) + IFNULL(cash_cycle_expedite_fees,0)
-          + IFNULL(cash_cycle_vat,0) + IFNULL(cash_cycle_opening_package_fees,0)
-          + IFNULL(cash_cycle_flex_ship_fees,0) + IFNULL(cash_cycle_fulfillment_fees,0)) AS fees
-      FROM \`${PROJECT}.bosta.deliveries_detail\`
-      WHERE state_code = 45
-        AND updated_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
-    ),
-    logestechs_30d AS (
-      -- Logestechs: assume delivered >${LOGESTECHS_PAYOUT_LAG_DAYS}d ago is paid out, otherwise pending.
-      -- net_cod is the courier's net-of-fees figure that lands in Malabisy's account.
-      SELECT
-        SUM(IF(delivery_date < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${LOGESTECHS_PAYOUT_LAG_DAYS} DAY),
-               IFNULL(net_cod, 0), 0)) AS received,
-        SUM(IF(delivery_date >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${LOGESTECHS_PAYOUT_LAG_DAYS} DAY),
-               IFNULL(net_cod, 0), 0)) AS pending,
-        SUM(IFNULL(cod, 0))            AS gross,
-        SUM(IFNULL(cod, 0) - IFNULL(net_cod, 0)) AS fees
-      FROM \`${PROJECT}.bronze.logestechs_deliveries\`
-      WHERE status = 'DELIVERED_TO_RECIPIENT'
-        AND COALESCE(delivery_date, _synced_at) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
-    )
+  const c = clauses(filter);
+
+  // Each branch returns a single row of (received, pending, gross, fees).
+  // When a courier is filtered out we substitute a constant-zero stub so the
+  // CROSS JOIN below still yields one combined row.
+  const bostaCte = c.wantBosta ? `
     SELECT
-      IFNULL(b.received, 0)   AS bosta_received,
-      IFNULL(b.pending, 0)    AS bosta_pending,
-      IFNULL(b.gross, 0)      AS bosta_gross,
-      IFNULL(b.fees, 0)       AS bosta_fees,
-      IFNULL(l.received, 0)   AS logestechs_received,
-      IFNULL(l.pending, 0)    AS logestechs_pending,
-      IFNULL(l.gross, 0)      AS logestechs_gross,
-      IFNULL(l.fees, 0)       AS logestechs_fees
-    FROM bosta_30d b CROSS JOIN logestechs_30d l
+      SUM(IF(next_cashout_date < CURRENT_TIMESTAMP(),
+             cash_cycle_cod
+             - IFNULL(cash_cycle_bosta_fees,0) - IFNULL(cash_cycle_shipping_fees,0)
+             - IFNULL(cash_cycle_collection_fees,0) - IFNULL(cash_cycle_cod_fees,0)
+             - IFNULL(cash_cycle_insurance_fees,0) - IFNULL(cash_cycle_expedite_fees,0)
+             - IFNULL(cash_cycle_vat,0) - IFNULL(cash_cycle_opening_package_fees,0)
+             - IFNULL(cash_cycle_flex_ship_fees,0) - IFNULL(cash_cycle_fulfillment_fees,0),
+             0)) AS received,
+      SUM(IF(next_cashout_date >= CURRENT_TIMESTAMP() OR next_cashout_date IS NULL,
+             IFNULL(cash_cycle_cod,0) - IFNULL(cash_cycle_bosta_fees,0)
+             - IFNULL(cash_cycle_shipping_fees,0) - IFNULL(cash_cycle_collection_fees,0)
+             - IFNULL(cash_cycle_cod_fees,0) - IFNULL(cash_cycle_insurance_fees,0)
+             - IFNULL(cash_cycle_expedite_fees,0) - IFNULL(cash_cycle_vat,0)
+             - IFNULL(cash_cycle_opening_package_fees,0) - IFNULL(cash_cycle_flex_ship_fees,0)
+             - IFNULL(cash_cycle_fulfillment_fees,0),
+             0)) AS pending,
+      SUM(IFNULL(cash_cycle_cod,0)) AS gross,
+      SUM(IFNULL(cash_cycle_bosta_fees,0) + IFNULL(cash_cycle_shipping_fees,0)
+        + IFNULL(cash_cycle_collection_fees,0) + IFNULL(cash_cycle_cod_fees,0)
+        + IFNULL(cash_cycle_insurance_fees,0) + IFNULL(cash_cycle_expedite_fees,0)
+        + IFNULL(cash_cycle_vat,0) + IFNULL(cash_cycle_opening_package_fees,0)
+        + IFNULL(cash_cycle_flex_ship_fees,0) + IFNULL(cash_cycle_fulfillment_fees,0)) AS fees
+    FROM \`${PROJECT}.bosta.deliveries_detail\` bd
+    WHERE state_code = 45
+      ${c.bostaDate}
+      ${c.vendorClauseBosta}
+  ` : `SELECT 0.0 AS received, 0.0 AS pending, 0.0 AS gross, 0.0 AS fees`;
+
+  const logCte = c.wantLogestechs ? `
+    SELECT
+      SUM(IF(delivery_date < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${LOGESTECHS_PAYOUT_LAG_DAYS} DAY),
+             IFNULL(net_cod, 0), 0))                  AS received,
+      SUM(IF(delivery_date >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${LOGESTECHS_PAYOUT_LAG_DAYS} DAY),
+             IFNULL(net_cod, 0), 0))                  AS pending,
+      SUM(IFNULL(cod, 0))                             AS gross,
+      SUM(IFNULL(cod, 0) - IFNULL(net_cod, 0))        AS fees
+    FROM \`${PROJECT}.bronze.logestechs_deliveries\` ld
+    WHERE status = 'DELIVERED_TO_RECIPIENT'
+      ${c.logDate}
+      ${c.vendorClauseLog}
+  ` : `SELECT 0.0 AS received, 0.0 AS pending, 0.0 AS gross, 0.0 AS fees`;
+
+  const sql = `
+    WITH bosta_branch AS (${bostaCte}),
+         log_branch   AS (${logCte})
+    SELECT
+      IFNULL(b.received, 0) AS bosta_received,
+      IFNULL(b.pending, 0)  AS bosta_pending,
+      IFNULL(b.gross, 0)    AS bosta_gross,
+      IFNULL(b.fees, 0)     AS bosta_fees,
+      IFNULL(l.received, 0) AS logestechs_received,
+      IFNULL(l.pending, 0)  AS logestechs_pending,
+      IFNULL(l.gross, 0)    AS logestechs_gross,
+      IFNULL(l.fees, 0)     AS logestechs_fees
+    FROM bosta_branch b CROSS JOIN log_branch l
   `;
   const [rows] = await bq.query({ query: sql });
   const r = (rows[0] || {}) as Record<string, unknown>;
@@ -113,33 +168,52 @@ export interface MonthlyCashflowRow {
   total_net_usd: number;
 }
 
-export async function fetchMonthlyCashflow(months = 12): Promise<MonthlyCashflowRow[]> {
+export async function fetchMonthlyCashflow(months = 12, filter?: FinanceFilter): Promise<MonthlyCashflowRow[]> {
   const bq = getBigQuery();
+  const c = clauses(filter);
+
+  // When the filter narrows below 12 months we still want to show whatever's in
+  // the active window. But when no date filter is set, force at least N months
+  // so the chart isn't empty on first paint.
+  const monthsClauseBosta = filter?.startDate
+    ? "" // filter date already enforced by clauses()
+    : `AND DATE(updated_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL ${months} MONTH)`;
+  const monthsClauseLog = filter?.startDate
+    ? ""
+    : `AND DATE(COALESCE(delivery_date, _synced_at)) >= DATE_SUB(CURRENT_DATE(), INTERVAL ${months} MONTH)`;
+
+  const bostaCte = c.wantBosta ? `
+    SELECT
+      FORMAT_DATE('%Y-%m', DATE(updated_at)) AS month,
+      SUM(IFNULL(cash_cycle_cod, 0)
+        - IFNULL(cash_cycle_bosta_fees,0) - IFNULL(cash_cycle_shipping_fees,0)
+        - IFNULL(cash_cycle_collection_fees,0) - IFNULL(cash_cycle_cod_fees,0)
+        - IFNULL(cash_cycle_insurance_fees,0) - IFNULL(cash_cycle_expedite_fees,0)
+        - IFNULL(cash_cycle_vat,0) - IFNULL(cash_cycle_opening_package_fees,0)
+        - IFNULL(cash_cycle_flex_ship_fees,0) - IFNULL(cash_cycle_fulfillment_fees,0)) AS bosta_net
+    FROM \`${PROJECT}.bosta.deliveries_detail\` bd
+    WHERE state_code = 45
+      ${c.bostaDate}
+      ${monthsClauseBosta}
+      ${c.vendorClauseBosta}
+    GROUP BY month
+  ` : `SELECT '' AS month, 0.0 AS bosta_net WHERE FALSE`;
+
+  const logCte = c.wantLogestechs ? `
+    SELECT
+      FORMAT_DATE('%Y-%m', DATE(COALESCE(delivery_date, _synced_at))) AS month,
+      SUM(IFNULL(net_cod, 0)) AS logestechs_net
+    FROM \`${PROJECT}.bronze.logestechs_deliveries\` ld
+    WHERE status = 'DELIVERED_TO_RECIPIENT'
+      ${c.logDate}
+      ${monthsClauseLog}
+      ${c.vendorClauseLog}
+    GROUP BY month
+  ` : `SELECT '' AS month, 0.0 AS logestechs_net WHERE FALSE`;
+
   const sql = `
-    WITH bosta AS (
-      SELECT
-        FORMAT_DATE('%Y-%m', DATE(updated_at)) AS month,
-        SUM(IFNULL(cash_cycle_cod, 0)
-          - IFNULL(cash_cycle_bosta_fees,0) - IFNULL(cash_cycle_shipping_fees,0)
-          - IFNULL(cash_cycle_collection_fees,0) - IFNULL(cash_cycle_cod_fees,0)
-          - IFNULL(cash_cycle_insurance_fees,0) - IFNULL(cash_cycle_expedite_fees,0)
-          - IFNULL(cash_cycle_vat,0) - IFNULL(cash_cycle_opening_package_fees,0)
-          - IFNULL(cash_cycle_flex_ship_fees,0) - IFNULL(cash_cycle_fulfillment_fees,0)) AS bosta_net
-      FROM \`${PROJECT}.bosta.deliveries_detail\`
-      WHERE state_code = 45
-        -- TIMESTAMP_SUB doesn't support MONTH, so we cast to DATE for the cutoff.
-        AND DATE(updated_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL ${months} MONTH)
-      GROUP BY month
-    ),
-    logestechs AS (
-      SELECT
-        FORMAT_DATE('%Y-%m', DATE(COALESCE(delivery_date, _synced_at))) AS month,
-        SUM(IFNULL(net_cod, 0)) AS logestechs_net
-      FROM \`${PROJECT}.bronze.logestechs_deliveries\`
-      WHERE status = 'DELIVERED_TO_RECIPIENT'
-        AND DATE(COALESCE(delivery_date, _synced_at)) >= DATE_SUB(CURRENT_DATE(), INTERVAL ${months} MONTH)
-      GROUP BY month
-    )
+    WITH bosta AS (${bostaCte}),
+         logestechs AS (${logCte})
     SELECT
       m.month,
       IFNULL(b.bosta_net, 0)        AS bosta_net,
@@ -175,8 +249,16 @@ export interface UpcomingCashout {
  * Bosta tells us next_cashout_date per parcel — group by date so admins know
  * how much money is hitting the bank on each upcoming day.
  */
-export async function fetchUpcomingCashouts(daysAhead = 21): Promise<UpcomingCashout[]> {
+export async function fetchUpcomingCashouts(daysAhead = 21, filter?: FinanceFilter): Promise<UpcomingCashout[]> {
   const bq = getBigQuery();
+  // Vendor filter applies; date filter does NOT (this is intentionally future-only).
+  const vendorFilter = filter?.vendor
+    ? `AND EXISTS (SELECT 1 FROM \`${PROJECT}.gold.line_item_pipeline\` g
+                   WHERE g.tracking_number = bd.tracking_number AND g.vendor = '${filter.vendor.replace(/'/g, "''")}')`
+    : "";
+  // Hide Bosta entirely if courier filter is set to Logestechs.
+  if (filter?.courier === "Logestechs") return [];
+
   const sql = `
     SELECT
       DATE(next_cashout_date) AS cashout_date,
@@ -187,11 +269,12 @@ export async function fetchUpcomingCashouts(daysAhead = 21): Promise<UpcomingCas
         - IFNULL(cash_cycle_insurance_fees,0) - IFNULL(cash_cycle_expedite_fees,0)
         - IFNULL(cash_cycle_vat,0) - IFNULL(cash_cycle_opening_package_fees,0)
         - IFNULL(cash_cycle_flex_ship_fees,0) - IFNULL(cash_cycle_fulfillment_fees,0)), 2) AS expected_net_egp
-    FROM \`${PROJECT}.bosta.deliveries_detail\`
+    FROM \`${PROJECT}.bosta.deliveries_detail\` bd
     WHERE state_code = 45
       AND next_cashout_date IS NOT NULL
       AND next_cashout_date >= CURRENT_TIMESTAMP()
       AND next_cashout_date < TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+      ${vendorFilter}
     GROUP BY cashout_date
     ORDER BY cashout_date ASC
   `;

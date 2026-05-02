@@ -122,10 +122,10 @@ function withParams(current: Record<string, string | undefined>, key: string, va
 
 async function OverviewTab({ filter }: { filter: FinanceFilter }) {
   const [summaryR, monthlyR, upcomingR, dailyR] = await Promise.all([
-    safe("summary",  () => fetchCashflowSummary(),    EMPTY_SUMMARY),
-    safe("monthly",  () => fetchMonthlyCashflow(12),  [] as MonthlyCashflowRow[]),
-    safe("upcoming", () => fetchUpcomingCashouts(21), [] as UpcomingCashout[]),
-    safe("daily",    () => fetchDailyNet(filter),     [] as DailyPoint[]),
+    safe("summary",  () => fetchCashflowSummary(filter),     EMPTY_SUMMARY),
+    safe("monthly",  () => fetchMonthlyCashflow(12, filter), [] as MonthlyCashflowRow[]),
+    safe("upcoming", () => fetchUpcomingCashouts(21, filter), [] as UpcomingCashout[]),
+    safe("daily",    () => fetchDailyNet(filter),            [] as DailyPoint[]),
   ]);
   const summary = summaryR.value;
   const monthly = monthlyR.value;
@@ -133,10 +133,15 @@ async function OverviewTab({ filter }: { filter: FinanceFilter }) {
   const daily = dailyR.value;
   const errors = [summaryR.error, monthlyR.error, upcomingR.error, dailyR.error].filter(Boolean) as string[];
 
+  const windowLabel = filter.startDate && filter.endDate
+    ? `${filter.startDate} → ${filter.endDate}`
+    : filter.startDate
+      ? `since ${filter.startDate}`
+      : "last 30 days";
   const cards = [
-    { label: "Already received", icon: Banknote, color: "emerald" as const,
+    { label: `Already received (${windowLabel})`, icon: Banknote, color: "emerald" as const,
       total: summary.total_received_egp, bosta: summary.bosta_received_egp, log: summary.logestechs_received_egp },
-    { label: "Pending — delivered, awaiting cashout", icon: Clock, color: "amber" as const,
+    { label: `Pending — delivered, awaiting cashout (${windowLabel})`, icon: Clock, color: "amber" as const,
       total: summary.total_pending_egp, bosta: summary.bosta_pending_egp, log: summary.logestechs_pending_egp },
   ];
 
@@ -442,9 +447,13 @@ function UpcomingCashoutsTable({ rows }: { rows: UpcomingCashout[] }) {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-base font-semibold">Upcoming Bosta cashouts</h2>
-          <p className="text-xs text-muted-foreground">Next 21 days · grouped by deposit date Bosta promised.</p>
+          <p className="text-xs text-muted-foreground">
+            Money Bosta will deposit to Malabisy's bank in the next 21 days. Each row is one promised deposit date —
+            from <span className="font-mono">bosta.deliveries_detail.next_cashout_date</span> for delivered parcels (state=45).
+            Logestechs doesn't expose a cashout date so it's not in this section.
+          </p>
         </div>
-        <Wallet className="size-4 text-muted-foreground" />
+        <Wallet className="size-4 shrink-0 text-muted-foreground" />
       </div>
       <div className="mt-4 overflow-x-auto">
         <table className="w-full text-sm">
